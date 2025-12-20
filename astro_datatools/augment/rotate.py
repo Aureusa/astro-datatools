@@ -69,7 +69,11 @@ class RotateAugment(BaseAugment):
 
         # Crop
         if self.dynamic_cropping:
-            new_w, new_h = self._largest_rotated_rect(w, h, max(self.angles))
+            new_sizes = [self._largest_rotated_rect(w, h, angle) for angle in self.angles]
+
+            # Find the smallest width and height to crop all to the same size
+            new_w = min(size[0] for size in new_sizes)
+            new_h = min(size[1] for size in new_sizes)
         elif self.specific_crop_size is not None:
             new_w, new_h = self.specific_crop_size
         else:
