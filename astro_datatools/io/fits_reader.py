@@ -36,3 +36,29 @@ class FitsReaderIO(BaseIO):
     def write(self, filepath: str, data: HDUList) -> None:
         """Overwrite in child class, not used in this reader."""
         raise NotImplementedError(f"Write method is not implemented in {self.__class__.__name__}.")
+
+
+def get_fits_header(idx: int, hdul: HDUList) -> fits.Header:
+    """Get the header of a specific HDU in the FITS file.
+
+    :param idx: Index of the HDU to retrieve the header from.
+    :type idx: int
+    :param hdul: HDUList object containing the FITS data.
+    :type hdul: astropy.io.fits.HDUList
+    :return: Header of the specified HDU.
+    :rtype: astropy.io.fits.Header
+    """
+    return hdul[idx].header
+
+
+def get_fits_data(idx: int, hdul: HDUList) -> fits.BinTableHDU | fits.ImageHDU | None:
+    """Get the data of a specific HDU in the FITS file.
+
+    :param idx: Index of the HDU to retrieve the data from.
+    :type idx: int
+    :param hdul: HDUList object containing the FITS data.
+    :type hdul: astropy.io.fits.HDUList
+    :return: Data of the specified HDU.
+    :rtype: astropy.io.fits.BinTableHDU | astropy.io.fits.ImageHDU | None
+    """
+    return hdul[idx].data
