@@ -12,7 +12,7 @@ Sky Survey with region-based convolutional neural networks" by Mostert et al. (2
 import numpy as np
 
 from .base import BaseAugment
-
+from ..utils.stretch import sqrt_stretch, asinh_stretch
 
 class LotssToRGBAugment(BaseAugment):
     """Class for converting LoTSS data to RGB format."""
@@ -40,8 +40,8 @@ class LotssToRGBAugment(BaseAugment):
         :rtype: dict
         """
         # Create RGB channels
-        channel_1 = np.sqrt(np.clip(data / (30 * self.rms_noise), 0, 1)) if not self.asinh_stretch else \
-            np.arcsinh(data / (30 * self.rms_noise)) / np.arcsinh(1)
+        channel_1 = sqrt_stretch(data) if not self.asinh_stretch else \
+            asinh_stretch(data, a=5 * self.rms_noise)
         channel_2 = np.where(data >= 3 * self.rms_noise, 1.0, 0.0)
         channel_3 = np.where(data >= 5 * self.rms_noise, 1.0, 0.0)
 
