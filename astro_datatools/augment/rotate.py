@@ -26,6 +26,9 @@ class RotateAugment(BaseAugment):
         :param height_and_width_axes: Tuple specifying the axes corresponding to height and width.
         :type height_and_width_axes: tuple
         :param dynamic_cropping: Whether to crop dynamically based on rotation.
+        When set to True, the largest possible rectangle without black borders will be used.
+        If False, no cropping is applied unless specific_crop_size is provided and empty regions
+        are padded with zeros.
         :type dynamic_cropping: bool
         :param specific_crop_size: Specific size (width, height) to crop to after rotation.
         :type specific_crop_size: tuple[int, int]
