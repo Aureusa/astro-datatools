@@ -10,7 +10,7 @@ class Segment:
         """
         Initialize the Segment with positions, number of sigmas, and RMS noise level.
 
-        :param positions: List of (y, x) (heigh, width) tuples indicating positions of interest.
+        :param positions: List of (x, y) (width, height) tuples indicating positions of interest.
         :type positions: list[tuple]
         :param nr_sigmas: Number of sigmas above the RMS to consider for segmentation.
         :type nr_sigmas: int
@@ -24,29 +24,11 @@ class Segment:
     def get_segmentation(self, data: np.ndarray) -> np.ndarray:
         """
         Generate a segmentation map for the given data.
+        Contours are created using watershed segmentation.
 
         :param data: 2D numpy array representing the data to segment.
         :type data: np.ndarray
         :return: 2D numpy array representing the segmentation map.
-        :rtype: np.ndarray
-        """
-        labels = None
-        for position in self.positions:
-            if labels is None:
-                labels = self._is_within_threshold(data, position)
-            else:
-                labels += self._is_within_threshold(data, position)
-        return labels
-
-    def _is_within_threshold(self, data: np.ndarray, position: tuple) -> np.ndarray:
-        """
-        Check if the data at the given position is within the threshold.
-
-        :param data: 2D numpy array representing the data to check.
-        :type data: np.ndarray
-        :param position: Tuple (y, x) indicating the position to check.
-        :type position: tuple
-        :return: 2D numpy array representing the segmentation labels.
         :rtype: np.ndarray
         """
         threshold = self.nr_sigmas * self.rms
@@ -54,16 +36,20 @@ class Segment:
         # Mask the region above the threshold
         mask = data >= threshold
 
-        # Create markers for watershed
+        # Create markers for watershed - mark all positions at once
         markers = np.zeros_like(data, dtype=int)
-        y, x = position
-        markers[y, x] = 1  # Marker for the region of interest
-        markers[~mask] = 0  # Marker for the background
+        valid_positions = [(x, y) for x, y in self.positions 
+                           if 0 <= y < data.shape[0] and 0 <= x < data.shape[1]]
+        if valid_positions:
+            xs, ys = zip(*valid_positions)
+            markers[list(ys), list(xs)] = 1
+        
+        markers[~mask] = 0  # Background
 
-        # Apply watershed segmentation
+        # Apply watershed segmentation once with all markers
         labels = watershed(-data, markers, mask=mask)
         return labels
-
+    
 
 class SegmentationMap:
     """
@@ -81,6 +67,7 @@ class SegmentationMap:
     def get_full_segmentation(self, data: np.ndarray) -> tuple[np.ndarray, dict[str, int]]:
         """
         Generate a full segmentation map for the given data.
+        Resolves overlaps by assigning contested pixels to the larger segment.
 
         :param data: 2D numpy array representing the data to segment.
         :type data: np.ndarray
@@ -88,14 +75,40 @@ class SegmentationMap:
         :rtype: tuple[np.ndarray, dict[str, int]]
         """
         segmentation_mapping = {}
-
-        seg_map = np.zeros_like(data, dtype=int)
+        segment_masks = {}
+        segment_sizes = {}
+        
+        # First pass: get all segments and their sizes
         label = 1
         for key, segment in self.seg_dict.items():
             seg = segment.get_segmentation(data)
-            seg_map += label * seg
-
+            segment_masks[key] = seg
+            segment_sizes[key] = np.sum(seg > 0)  # Count non-zero pixels
             segmentation_mapping[key] = label
             label += 1
+        
+        # Second pass: build final segmentation map, resolving conflicts
+        seg_map = np.zeros_like(data, dtype=int)
+        overlap_count = np.zeros_like(data, dtype=int)  # Track how many segments claim each pixel
+        
+        # Count overlaps
+        for seg in segment_masks.values():
+            overlap_count += (seg > 0).astype(int)
+        
+        # Assign pixels, prioritizing larger segments for contested regions
+        # Sort segments by size (largest first)
+        sorted_keys = sorted(segment_sizes.keys(), key=lambda k: segment_sizes[k], reverse=True)
+        
+        for key in sorted_keys:
+            seg = segment_masks[key]
+            label = segmentation_mapping[key]
+            
+            # Get pixels belonging to this segment
+            seg_pixels = seg > 0
+            
+            # Only assign pixels that haven't been claimed yet
+            unclaimed = seg_map == 0
+            seg_map[seg_pixels & unclaimed] = label
+        
         return seg_map, segmentation_mapping
     

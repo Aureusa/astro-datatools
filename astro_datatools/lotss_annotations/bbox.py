@@ -38,8 +38,8 @@ class BBox:
                 max_row, max_col = positions.max(axis=0)
                 
                 bounding_boxes[key] = {
-                    'top': min_row,
-                    'bottom': max_row,
+                    'top': max_row,
+                    'bottom': min_row,
                     'left': min_col,
                     'right': max_col
                 }
