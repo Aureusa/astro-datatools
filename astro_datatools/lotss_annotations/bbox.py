@@ -6,14 +6,17 @@ class BBox:
     """
     Generate bounding boxes from segmentation maps.
     """
-    def __init__(self, seg_dict: dict[str, Segment]):
+    def __init__(self, seg_dict: dict[str, Segment], find_grg: bool = True):
         """
         Initialize the BBox with a dictionary of segments.
         
         :param seg_dict: Dictionary where keys are segment identifiers and values are Segment objects.
         :type seg_dict: dict[str, Segment]
+        :param find_grg: Whether to identify and rename the giant radio galaxy (GRG) segment.
+        It is assumed to be the biggest segment containing the central pixel.
+        :type find_grg: bool
         """
-        self._segmentation_map = SegmentationMap(seg_dict)
+        self._segmentation_map = SegmentationMap(seg_dict, find_grg=find_grg)
 
     def get_bounding_boxes(self, data: np.ndarray) -> dict[str, dict[str, int]]:
         """

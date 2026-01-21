@@ -55,14 +55,18 @@ class SegmentationMap:
     """
     Class to handle multiple segments and create a full segmentation map.
     """
-    def __init__(self, seg_dict: dict[str, Segment]):
+    def __init__(self, seg_dict: dict[str, Segment], find_grg: bool = True):
         """
         Initialize the SegmentationMap with a dictionary of segments.
 
         :param seg_dict: Dictionary mapping keys to Segment objects.
         :type seg_dict: dict[str, Segment]
+        :param find_grg: Whether to identify and rename the giant radio galaxy (GRG) segment.
+        It is assumed to be the biggest segment containing the central pixel.
+        :type find_grg: bool
         """
         self.seg_dict = seg_dict
+        self.find_grg = find_grg
 
     def get_full_segmentation(self, data: np.ndarray) -> tuple[np.ndarray, dict[str, int]]:
         """
@@ -109,6 +113,51 @@ class SegmentationMap:
             # Only assign pixels that haven't been claimed yet
             unclaimed = seg_map == 0
             seg_map[seg_pixels & unclaimed] = label
+
+        if self.find_grg:
+            segmentation_mapping = self._find_grg_segment_and_update_mapping(
+                seg_map, segmentation_mapping, sorted_keys
+            )
         
         return seg_map, segmentation_mapping
+
+    def _find_grg_segment_and_update_mapping(
+            self,
+            seg_map: np.ndarray,
+            segmentation_mapping: dict[str, int],
+            sorted_keys: list
+        ) -> dict[str, int]:
+        """
+        Identify the segment corresponding to the giant radio galaxy (GRG)
+        based on the central pixel location. Also update the segmentation mapping
+        to rename the identified segment as "GRG-<original_key>".
+        Assumes the GRG is the LARGEST segment containing the central pixel.
+
+        :param seg_map: 2D numpy array representing the segmentation map.
+        :param segmentation_mapping: Dictionary mapping keys to labels.
+        :param sorted_keys: List of segment keys sorted by size (largest first).
+        :return: Updated segmentation mapping.
+        """
+        datashape = seg_map.shape[-1]
+        center_x = datashape // 2
+        center_y = center_x
+
+        # Iterate through segments from largest to smallest
+        for key in sorted_keys:
+            label = segmentation_mapping[key]
+            positions = np.argwhere(seg_map == label)
+
+            if len(positions) == 0: # Safety first
+                continue
+
+            # Find bounding box of the segment
+            min_row, min_col = positions.min(axis=0)
+            max_row, max_col = positions.max(axis=0)
+            if (min_row <= center_y <= max_row) and (min_col <= center_x <= max_col):
+                # Remove old key and add new GRG-prefixed key
+                del segmentation_mapping[key]
+                segmentation_mapping[f"GRG-{key}"] = label
+                break
+        
+        return segmentation_mapping
     
