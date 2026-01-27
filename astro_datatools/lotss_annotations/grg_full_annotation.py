@@ -41,7 +41,7 @@ class GRGFullAnnotation:
         grg_seg, grg_bbox = self._identify_grg_annotations(
             seg_map, bounding_boxes, segmentation_mapping, sorted_keys
         )
-        return grg_seg, grg_bbox
+        return grg_seg, grg_bbox, seg_map
     
     def _annotate_all(self) -> dict[str, np.ndarray]:
         """

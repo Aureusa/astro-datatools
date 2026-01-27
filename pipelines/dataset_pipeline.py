@@ -12,6 +12,7 @@ from astro_datatools import setup_logging
 from astro_datatools.augment import RotateAugment, LotssToRGBAugment
 from astro_datatools.lotss_annotations import Segment
 from astro_datatools.lotss_annotations.grg_full_annotation import GRGFullAnnotation
+from astro_datatools.lotss_annotations.precompute_proposals import PrecomputeProposals
 from astro_datatools.core.datasets.coco.builder import CocoDatasetBuilderBase
 from astro_datatools.core.datasets.coco.lotss_sample import LoTSS_Sample
 from astro_datatools.core.datasets.coco.category import LoTSS_GRG_CocoCategory
@@ -59,6 +60,8 @@ DATASET_SPLITS = {
     "test": 0.15
 }
 
+MAX_PRECOMPUTED_ISLANDS = 10 # To limit combinatorial explosion in proposals
+
 GRG_CATEGORY = LoTSS_GRG_CocoCategory(id=1, name="GRG")
 
 
@@ -100,16 +103,22 @@ class LotssDatasetBuilder(CocoDatasetBuilderBase):
         for cutout in tqdm(self.cutouts, desc="Generating LoTSS Samples"):
             # Get annotations
             data = cutout.get_data()
-            grg_seg, grg_bbox = self._annotate(cutout, data)
+            grg_seg, grg_bbox, seg_map = self._annotate(cutout, data)
             if grg_seg is None or grg_bbox is None:
                 logger.warning(f"Skipping cutout at RA: {cutout.ra}, DEC: {cutout.dec} - no GRG annotation found.")
                 continue
+            proposed_boxes, proposal_scores = PrecomputeProposals(
+                seg_map, max_islands=MAX_PRECOMPUTED_ISLANDS
+            ).precompute(return_scores=True)
 
             # Apply rotations (already optimized)
             rotated_data = self.rotator.augment(data) # (B, H, W)
             rotated_grg_segs = self.rotator.augment(grg_seg) # (B, H, W)
             rotated_grg_bboxes = self.rotator.augment_bbox(
                 grg_bbox, original_h=CUTOUT_SIZE, original_w=CUTOUT_SIZE
+            )
+            rotated_proposed_boxes = self.rotator.augment_proposal_boxes(
+                proposed_boxes, original_h=CUTOUT_SIZE, original_w=CUTOUT_SIZE
             )
 
             # Get RGB images (vectorized for all rotations at once)
@@ -125,6 +134,8 @@ class LotssDatasetBuilder(CocoDatasetBuilderBase):
                     dec=cutout.dec,
                     rgb_image=rgb_rotated_data[angle_index], # (C, H, W)
                     full_annotation=(rotated_grg_segs[angle_index], rotated_grg_bboxes[angle_index]),
+                    proposed_boxes=rotated_proposed_boxes[angle_index],
+                    proposal_scores=proposal_scores,
                     rotated=True if angle != 0 else False,
                     rotation_angle=angle,
                     stretch=STRETCH_TYPE,

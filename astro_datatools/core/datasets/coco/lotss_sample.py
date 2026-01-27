@@ -55,6 +55,8 @@ class LoTSS_Sample(CocoSampleBase):
             dec: float,
             rgb_image: np.ndarray, # RGB image as a numpy array (C, H, W)
             full_annotation: tuple, # Tuple containing the grg_seg, grg_bbox
+            proposed_boxes: np.ndarray,
+            proposal_scores: np.ndarray,
             rotated: bool = False,
             rotation_angle: float = 0.0,
             stretch: str = "sqrt_stretch",
@@ -94,11 +96,18 @@ class LoTSS_Sample(CocoSampleBase):
         self.old_redshift = old_redshift
         self.new_redshift = new_redshift
 
+        # Proposed boxes and scores
+        self.proposed_boxes = proposed_boxes
+        self.proposal_scores = proposal_scores
+
         # Action flags
         self.save_image = save_image
-        self.directory = os.path.join(directory, "images")
-        if not os.path.exists(self.directory):
-            os.makedirs(self.directory)
+        self.image_directory = os.path.join(directory, "images")
+        if not os.path.exists(self.image_directory):
+            os.makedirs(self.image_directory)
+        self.proposal_directory = os.path.join(directory, "proposals")
+        if not os.path.exists(self.proposal_directory):
+            os.makedirs(self.proposal_directory)
 
     def register_sample(self) -> dict:
         """
@@ -116,11 +125,30 @@ class LoTSS_Sample(CocoSampleBase):
         annotation = self._register_annotation()  # Assuming data is in the second channel
         image = self._register_image()
         image = self._register_metadata(image)
+        self._save_proposals()
 
         return {
             'image': image.to_dict(),
             'annotation': annotation.to_dict()
         }
+
+    def _generate_proposal_filename(self) -> str:
+        """Generate proposal filename matching the image filename (with .npz extension)."""
+        image_filename = self._generate_image_filename()
+        # Replace .png with .npz
+        return image_filename.replace('.png', '.npz')
+
+    def _save_proposals(self):
+        """Save precomputed proposals in a format compatible with Detectron2."""
+        if self.proposed_boxes is not None and len(self.proposed_boxes) > 0:
+            proposal_filename = self._generate_proposal_filename()
+            proposal_filepath = os.path.join(self.proposal_directory, proposal_filename)
+            
+            np.savez_compressed(
+                proposal_filepath,
+                boxes=self.proposed_boxes,  # (N, 4) in [x1, y1, x2, y2] format
+                scores=self.proposal_scores  # (N,) objectness scores
+            )
 
     def _register_annotation(self) -> LoTSS_GRG_CocoAnnotation:
         grg_seg, grg_bbox = self.full_annotation
@@ -141,7 +169,7 @@ class LoTSS_Sample(CocoSampleBase):
     
     def _register_image(self) -> LoTSS_GRG_CocoImage:
         file_name = self._generate_image_filename()
-        full_filepath = os.path.join(self.directory, file_name)
+        full_filepath = os.path.join(self.image_directory, file_name)
         height, width = self.rgb_image.shape[1], self.rgb_image.shape[2]
 
         self._save_image(full_filepath)

@@ -6,7 +6,7 @@ class BBox:
     """
     Generate bounding boxes from segmentation maps.
     """
-    def __init__(self, seg_dict: dict[str, Segment], find_grg: bool = True):
+    def __init__(self, seg_dict: dict[str, Segment]):
         """
         Initialize the BBox with a dictionary of segments.
         
@@ -16,7 +16,7 @@ class BBox:
         It is assumed to be the biggest segment containing the central pixel.
         :type find_grg: bool
         """
-        self._segmentation_map = SegmentationMap(seg_dict, find_grg=find_grg)
+        self._segmentation_map = SegmentationMap(seg_dict)
 
     def get_bounding_boxes(self, data: np.ndarray) -> dict[str, dict[str, int]]:
         """
