@@ -64,17 +64,16 @@ class RotateAugment(BaseAugment):
 
         logger.debug(f"Original data shape: {data.shape}")
 
+        # Rotate all angles - this is already reasonably efficient
         augmented_data = [
             rotate(data, angle, axes=self.height_and_width_axes, reshape=False)
             for angle in self.angles
         ]
         augmented_data = np.stack(augmented_data, axis=0) # Shape: (num_angles, ...)
 
-        # Crop
+        # Crop - pre-calculate target size once
         if self.dynamic_cropping:
-            new_sizes = [self._largest_rotated_rect(w, h, angle) for angle in self.angles]
-
-            # Find the smallest width and height to crop all to the same size
+            new_sizes = [self.largest_rotated_rect(w, h, angle) for angle in self.angles]
             new_w = min(size[0] for size in new_sizes)
             new_h = min(size[1] for size in new_sizes)
         elif self.specific_crop_size is not None:
@@ -88,7 +87,101 @@ class RotateAugment(BaseAugment):
         logger.debug(f"Augmented data shape after rotation and cropping: {augmented_data.shape}")
         return augmented_data
 
-    def _largest_rotated_rect(self, w: int, h: int, angle: float) -> tuple[int, int]:
+    def augment_bbox(self, bbox: dict[str, int], original_h: int, original_w: int) -> list[dict[str, int]]:
+        """
+        Apply rotation augmentation to a bounding box.
+
+        :param bbox: Bounding box with keys 'top', 'bottom', 'left', 'right'
+        :param original_h: Original image height before rotation
+        :param original_w: Original image width before rotation
+        :return: List of rotated bounding boxes for each angle
+        """
+        # Pre-calculate crop dimensions for each angle to avoid redundant calculation
+        crop_dims = []
+        for angle in self.angles:
+            if self.dynamic_cropping:
+                cropped_w, cropped_h = self.largest_rotated_rect(original_w, original_h, angle)
+            elif self.specific_crop_size is not None:
+                cropped_w, cropped_h = self.specific_crop_size
+            else:
+                cropped_w, cropped_h = original_w, original_h
+            crop_dims.append((cropped_w, cropped_h))
+        
+        rotated_bboxes = [
+            self._rotate_bbox(bbox, angle, original_h, original_w, crop_h, crop_w)
+            for angle, (crop_w, crop_h) in zip(self.angles, crop_dims)
+        ]
+        
+        return rotated_bboxes
+
+    def _rotate_bbox(
+            self,
+            bbox: dict[str, int],
+            angle: float,
+            original_h: int,
+            original_w: int, 
+            cropped_h: int,
+            cropped_w: int
+        ) -> dict[str, int]:
+        """
+        Rotate a bounding box and adjust for cropping.
+        
+        :param bbox: Bounding box with keys 'top', 'bottom', 'left', 'right'
+        :param angle: Rotation angle in degrees
+        :param original_h: Original image height before rotation
+        :param original_w: Original image width before rotation
+        :param cropped_h: Height after rotation and cropping
+        :param cropped_w: Width after rotation and cropping
+        :return: Rotated and cropped bounding box
+        """
+        # Get bbox corners (in image coordinates)
+        corners = np.array([
+            [bbox['left'], bbox['bottom']],
+            [bbox['right'], bbox['bottom']],
+            [bbox['right'], bbox['top']],
+            [bbox['left'], bbox['top']]
+        ])
+        
+        # Rotate around image center
+        center = np.array([original_w / 2, original_h / 2])
+        angle_rad = np.radians(angle)
+        cos_a = np.cos(angle_rad)
+        sin_a = np.sin(angle_rad)
+        
+        # Rotation matrix
+        rotation_matrix = np.array([
+            [cos_a, -sin_a],
+            [sin_a, cos_a]
+        ])
+        
+        # Translate to origin, rotate, translate back
+        corners_centered = corners - center
+        corners_rotated = corners_centered @ rotation_matrix.T
+        corners_rotated += center
+        
+        # Adjust for cropping (center crop)
+        crop_offset_x = (original_w - cropped_w) / 2
+        crop_offset_y = (original_h - cropped_h) / 2
+        corners_rotated -= np.array([crop_offset_x, crop_offset_y])
+        
+        # Get new axis-aligned bbox
+        min_x, min_y = corners_rotated.min(axis=0)
+        max_x, max_y = corners_rotated.max(axis=0)
+        
+        # Clip to image bounds
+        min_x = max(0, int(np.floor(min_x)))
+        min_y = max(0, int(np.floor(min_y)))
+        max_x = min(cropped_w, int(np.ceil(max_x)))
+        max_y = min(cropped_h, int(np.ceil(max_y)))
+        
+        return {
+            'left': min_x,
+            'right': max_x,
+            'bottom': min_y,
+            'top': max_y
+        }
+
+    def largest_rotated_rect(self, w: int, h: int, angle: float) -> tuple[int, int]:
         """
         Calculate the largest rectangle that fits inside a rotated image without black borders.
         

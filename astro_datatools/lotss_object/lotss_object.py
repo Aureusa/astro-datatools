@@ -1,16 +1,17 @@
 import numpy as np
 from astropy.io import fits
 
+from .reproject import reproject
 from ..lotss_annotations.segmentation import Segment
 
 
 class LoTSSComponent(Segment):
-    def __init__(self, positions: tuple[int, int], nr_sigmas: float, rms: float):
+    def __init__(self, positions: list[tuple], nr_sigmas: float, rms: float):
         """
         Defines a LoTSS component for segmentation and component map generation.
         
-        :param positions: (y, x) tuple representing pixel positions of the component.
-        :type positions: Tuple[int, int]
+        :param positions: (x, y) tuple representing pixel positions of the component.
+        :type positions: list[tuple]
         :param nr_sigmas: Number of sigmas above the RMS for segmentation threshold.
         :type nr_sigmas: float
         :param rms: Root Mean Square noise level of the data.
@@ -42,20 +43,18 @@ class LoTSSObject:
             self,
             data: np.ndarray,
             header: fits.Header,
-            positions: list[tuple[int, int]],
+            positions: list[tuple],
             nr_sigmas: float = 5,
             rms: float = 0.1*1e-3,
-            redshift: float = None
+            metadata: dict = {}
         ) -> None:
         """
         Initialize a LoTSS object.
 
         :param data: 2D numpy array representing the image data.
         :type data: np.ndarray
-        :param header: FITS header associated with the data.
-        :type header: fits.Header
-        :param positions: List of (y, x) tuples representing pixel positions of components.
-        :type positions: List[Tuple[int, int]]
+        :param positions: List of (x, y) tuples representing pixel positions of components.
+        :type positions: list[tuple]
         :param nr_sigmas: Number of sigmas above the RMS for segmentation threshold.
         :type nr_sigmas: float
         :param rms: Root Mean Square noise level of the data.
@@ -64,11 +63,17 @@ class LoTSSObject:
         :type redshift: float, optional
         """
         self.data = data
-        self.header = header
         self.positions = positions
         self.nr_sigmas = nr_sigmas
         self.rms = rms
-        self.redshift = redshift
+        self.metadata = metadata
+
+        if "redshift" in self.metadata:
+            self.redshift = self.metadata["redshift"]
+        else:
+            self.redshift = None
+
+        self.header = header
 
         self.object_data = None  # To be generated when get_object is called
 
@@ -83,8 +88,6 @@ class LoTSSObject:
         :return: Reprojected image as a 2D numpy array.
         :rtype: np.ndarray
         """
-        from .reproject import reproject
-
         return reproject(self, desired_redshift, alpha)
 
     def get_object(self) -> np.ndarray:
@@ -99,7 +102,7 @@ class LoTSSObject:
             return self.object_data
         
         object_data = np.zeros_like(self.data)
-        object_data += sum([LoTSSComponent(pos, self.nr_sigmas, self.rms).get_component(self.data) for pos in self.positions])
+        object_data = LoTSSComponent(self.positions, self.nr_sigmas, self.rms).get_component(self.data)
         self.object_data = object_data
         return object_data
         

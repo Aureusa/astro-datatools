@@ -12,7 +12,7 @@ Sky Survey with region-based convolutional neural networks" by Mostert et al. (2
 import numpy as np
 
 from .base import BaseAugment
-from ..utils.stretch import sqrt_stretch, asinh_stretch
+from ..transforms.stretch import sqrt_stretch, asinh_stretch
 
 class LotssToRGBAugment(BaseAugment):
     """Class for converting LoTSS data to RGB format."""
@@ -33,19 +33,35 @@ class LotssToRGBAugment(BaseAugment):
     def augment(self, data: np.ndarray) -> np.ndarray:
         """
         Convert LoTSS data to RGB format as described in Mostert et al. (2022).
-
-        :param data: Input data containing 'radio_data' and 'rms_noise'.
-        :type data: dict
-        :return: Augmented data with 'rgb_data' key added.
-        :rtype: dict
+        Supports both single images (H, W) -> (C, H, W) and batches (B, H, W) -> (B, C, H, W).
         """
-        # Create RGB channels
-        channel_1 = sqrt_stretch(data) if not self.asinh_stretch else \
-            asinh_stretch(data, a=5 * self.rms_noise)
-        channel_2 = np.where(data >= 3 * self.rms_noise, 1.0, 0.0)
-        channel_3 = np.where(data >= 5 * self.rms_noise, 1.0, 0.0)
-
-        # Stack channels to create RGB image
-        rgb_data = np.stack([channel_1, channel_2, channel_3], axis=0)
+        # Pre-calculate thresholds to avoid repeated multiplications
+        threshold_3sigma = 3 * self.rms_noise
+        threshold_5sigma = 5 * self.rms_noise
+        
+        # Determine if batched or single image
+        if data.ndim == 2:
+            # Single image (H, W)
+            channel_1 = sqrt_stretch(data) if not self.asinh_stretch else \
+                asinh_stretch(data, a=threshold_5sigma)
+            channel_2 = (data >= threshold_3sigma).astype(np.float32)
+            channel_3 = (data >= threshold_5sigma).astype(np.float32)
+            
+            # Stack channels to create RGB image (C, H, W)
+            rgb_data = np.stack([channel_1, channel_2, channel_3], axis=0)
+            
+        elif data.ndim == 3:
+            # Batched images (B, H, W)
+            channel_1 = sqrt_stretch(data) if not self.asinh_stretch else \
+                asinh_stretch(data, a=threshold_5sigma)
+            channel_2 = (data >= threshold_3sigma).astype(np.float32)
+            channel_3 = (data >= threshold_5sigma).astype(np.float32)
+            
+            # Stack channels to create RGB images (B, C, H, W)
+            rgb_data = np.stack([channel_1, channel_2, channel_3], axis=1)
+            
+        else:
+            raise ValueError(f"Expected 2D (H, W) or 3D (B, H, W) input, got shape {data.shape}")
+        
         return rgb_data
-    
+        
