@@ -1,9 +1,13 @@
 from abc import ABC, abstractmethod
 from tqdm import tqdm
 import json
+import logging
 
 from .sample import CocoSampleBase
 from .category import CocoCategoryBase
+
+
+logger = logging.getLogger(__name__)
 
 
 class CocoDatasetBuilderBase(ABC):
@@ -30,16 +34,37 @@ class CocoDatasetBuilderBase(ABC):
         self._validate_categories(coco)
 
         # Generate samples and register them
-        samples = self._generate_samples()
-        for samp in tqdm(samples, desc="Registering Samples"):
-            result = samp.register_sample()
-            coco["images"].append(result['image'])
-            coco["annotations"].append(result['annotation'])
+        # samples = self._generate_samples()
+        # for samp in tqdm(samples, desc="Registering Samples"):
+        #     result = samp.register_sample()
+        #     coco["images"].append(result['image'])
+        #     coco["annotations"].append(result['annotation'])
+        coco = self._populate_samples(coco)
+
+        logger.info(f"COCO dataset built with {len(coco['images'])} images, "
+                    f"{len(coco['annotations'])} annotations, "
+                    f"and {len(coco['categories'])} categories.")
 
         # Save COCO dataset as JSON
         with open(filepath, 'w') as f:
             json.dump(coco, f, indent=4)
 
+        return coco
+
+    def _register_sample(self, sample: CocoSampleBase, coco: dict) -> dict:
+        """
+        Register a sample into the COCO dataset structure.
+
+        :param sample: The sample to register.
+        :type sample: CocoSampleBase
+        :param coco: The COCO dataset dictionary to update.
+        :type coco: dict
+        :return: Updated COCO dataset dictionary.
+        :rtype: dict
+        """
+        result = sample.register_sample()
+        coco["images"].append(result['image'])
+        coco["annotations"].append(result['annotation'])
         return coco
     
     @abstractmethod
@@ -51,7 +76,7 @@ class CocoDatasetBuilderBase(ABC):
         pass
 
     @abstractmethod
-    def _generate_samples(self) -> list[CocoSampleBase]:
+    def _populate_samples(self, coco: dict) -> dict:
         pass
 
     def _validate_categories(self, coco: dict) -> None:

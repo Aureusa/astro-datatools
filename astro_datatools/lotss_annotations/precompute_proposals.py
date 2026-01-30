@@ -87,7 +87,6 @@ class PrecomputeProposals:
             # Normalize scores to [0, 1] range
             if scores.max() > 0:
                 scores = scores / scores.max()
-            print(f"Generated {len(boxes)} proposal boxes.")
             return boxes, scores
         
         return boxes

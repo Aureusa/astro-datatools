@@ -4,6 +4,7 @@ import pandas as pd
 from tqdm import tqdm
 import numpy as np
 import os
+import gc
 from copy import deepcopy
 import logging
 
@@ -39,7 +40,7 @@ DATASET_SAVE_DIR = "/net/vdesk/data2/penchev/project_data/full-dataset/"
 RA_DEC_LIST = list(
     zip(GIANTS_CATALOG["RAJ2000"].values, GIANTS_CATALOG["DEJ2000"].values)
 )
-RA_DEC_LIST = RA_DEC_LIST[:100] # Chose only first 100 for testing
+# RA_DEC_LIST = RA_DEC_LIST[:100] # Chose only first 100 for testing
 
 CUTOUT_SIZE = 425 # pixels - this gives us 300 pixels after rotation of 45 degrees
 CROP_SIZE = 300 # pixels - final size after rotation and cropping
@@ -85,6 +86,8 @@ class LotssDatasetBuilder(CocoDatasetBuilderBase):
             asinh_stretch=False if STRETCH_TYPE == "sqrt_stretch" else True
         )
 
+        self.dataset_type = dataset_type
+
     def _get_filepath(self) -> str:
         return os.path.join(self.save_dir, "annotations.json")
         
@@ -92,15 +95,14 @@ class LotssDatasetBuilder(CocoDatasetBuilderBase):
         coco['categories'].append(GRG_CATEGORY.to_dict())
         return coco
 
-    def _generate_samples(self) -> list[LoTSS_Sample]:
-        samples = []
+    def _populate_samples(self, coco: dict) -> dict:
         id_ = 1
         
         # Pre-create directories to avoid repeated existence checks
         images_dir = os.path.join(self.save_dir, "images")
         os.makedirs(images_dir, exist_ok=True)
         
-        for cutout in tqdm(self.cutouts, desc="Generating LoTSS Samples"):
+        for cutout in tqdm(self.cutouts, desc=f"Generating LoTSS Samples for COCO {self.dataset_type} Dataset"):
             # Get annotations
             data = cutout.get_data()
             grg_seg, grg_bbox, seg_map = self._annotate(cutout, data)
@@ -146,9 +148,20 @@ class LotssDatasetBuilder(CocoDatasetBuilderBase):
                     directory=self.save_dir,
                     save_image=True
                 )
-                samples.append(sample)
+                coco = self._register_sample(sample, coco)
                 id_ += 1
-        return samples
+
+            # Free memory
+            del data
+            del grg_seg, grg_bbox, seg_map
+            del proposed_boxes, proposal_scores
+            del rotated_data
+            del rotated_grg_segs
+            del rotated_grg_bboxes
+            del rotated_proposed_boxes
+            del rgb_rotated_data
+            gc.collect()
+        return coco
 
     def _convert_ao_dict_to_segment_dict(self, ao_dict):
         """
@@ -212,7 +225,7 @@ def main():
         size_pixels = CUTOUT_SIZE,
         save=False
     )
-    cutouts = cutouts[:10] # For testing, use only first 10 cutouts
+    # cutouts = cutouts[:10] # For testing, use only first 10 cutouts
     logger.info(f"Generated {len(cutouts)} cutouts.")
 
     logger.info("Splitting cutouts into train, val, test sets...")
