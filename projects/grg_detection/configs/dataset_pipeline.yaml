@@ -1,0 +1,24 @@
+PATHS:
+  # This file is used to extract the locations (and other metadata) of the discovered GRGs
+  GIANTS_CATALOG_FILEPATH: "/home/penchev/strw_lofar_data_utils/data/discovered_giants_catalogue.csv"
+
+  # This file is used to link components to sources for the annotation procedure
+  COMPONENT_CATALOGUE_FILEPATH: "/net/vdesk/data2/penchev/project_data/data/combined_cat/combined-components-v0.8.fits"
+
+  # Where to save the generated dataset
+  SAVE_DIR: "/net/vdesk/data2/penchev/project_data/inspect-pipeline/"
+
+CUTOUT_PARAMS:
+  CUTOUT_SIZE: 425 # pixels - this gives us 300 pixels after rotation of 45 degrees
+  CROP_SIZE: 300 # pixels - final size after rotation and cropping
+  RMS: 0.0001
+
+AUGMENTATION:
+  STRETCH_TYPE: "sqrt_stretch" # to keep consistency with previous work by Moesterd et al.
+  ROTATION_ANGLES: [0, 45, 90, 135, 180, 225, 270, 315] # degrees
+  
+  # Limits the number of islands to precompute per cutout.
+  # This limits the number of precomputed proposals we get for the RCNN model.
+  # The number of proposals is equal to 2^n - 1, where n is the number of islands.
+  MAX_PRECOMPUTED_ISLANDS: 10
+
