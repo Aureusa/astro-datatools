@@ -1,6 +1,6 @@
 from abc import ABC
 from dataclasses import dataclass
-from typing import ClassVar, List, Dict
+
 
 @dataclass
 class CocoCategoryBase(ABC):
@@ -17,9 +17,3 @@ class CocoCategoryBase(ABC):
             "id": self.id,
             "name": self.name,
         }
-    
-
-@dataclass
-class LoTSS_GRG_CocoCategory(CocoCategoryBase):
-    id: int = 1
-    name: str = "GRG"

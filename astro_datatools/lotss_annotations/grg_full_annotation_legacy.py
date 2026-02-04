@@ -36,12 +36,16 @@ class GRGFullAnnotation:
         :return: Tuple containing the GRG binary segmentation map and its bounding box.
         :rtype: tuple[np.ndarray, dict[str, int]]
         """
-        seg_map, bounding_boxes, segmentation_mapping, sorted_keys = self._annotate_all()
+        seg_map, bounding_boxes, segmentation_mapping, positions, sorted_keys = self._annotate_all()
 
-        grg_seg, grg_bbox = self._identify_grg_annotations(
-            seg_map, bounding_boxes, segmentation_mapping, sorted_keys
+        all_component_positions = []
+        for pos_list in positions.values():
+            all_component_positions.extend(pos_list)
+
+        grg_seg, grg_bbox, grg_positions = self._identify_grg_annotations(
+            seg_map, bounding_boxes, segmentation_mapping, positions, sorted_keys
         )
-        return grg_seg, grg_bbox, seg_map
+        return grg_seg, grg_bbox, grg_positions, all_component_positions, seg_map
     
     def _annotate_all(self) -> dict[str, np.ndarray]:
         """
@@ -52,10 +56,11 @@ class GRGFullAnnotation:
         :return: Dictionary mapping segment keys to their binary segmentation maps.
         :rtype: dict[str, np.ndarray]
         """
-        segmentation_mapping = {}
-        segment_masks = {}
-        segment_sizes = {}
-        bounding_boxes = {}
+        segmentation_mapping = {} # {key: label}
+        segment_masks = {} # {key: segmentation map}
+        segment_sizes = {} # {key: size}
+        bounding_boxes = {} # {key: {top, bottom, left, right}}
+        positions = {} # {key: list of (x,y) positions}
         
         # First pass: get all segments and their sizes
         label = 1
@@ -64,6 +69,7 @@ class GRGFullAnnotation:
             segment_masks[key] = seg
             segment_sizes[key] = np.sum(seg > 0)  # Count non-zero pixels
             segmentation_mapping[key] = label
+            positions[key] = segment.positions
             label += 1
         
         # Second pass: build final segmentation map, resolving conflicts
@@ -91,19 +97,20 @@ class GRGFullAnnotation:
                 
             rows, cols = np.where(assigned_pixels)
             bounding_boxes[key] = {
-                'top': rows.max(),
-                'bottom': rows.min(),
+                'bottom': rows.max(), # This was top
+                'top': rows.min(), # This was bottom
                 'left': cols.min(),
                 'right': cols.max()
             }
 
-        return seg_map, bounding_boxes, segmentation_mapping, sorted_keys
+        return seg_map, bounding_boxes, segmentation_mapping, positions, sorted_keys
 
     def _identify_grg_annotations(
             self,
             seg_map: np.ndarray,
             bounding_boxes: dict[str, dict[str, int]],
             segmentation_mapping: dict[str, int],
+            positions: dict[str, list[tuple[int, int]]],
             sorted_keys: list
         ) -> tuple[np.ndarray, dict[str, int]]:
         """
@@ -132,8 +139,8 @@ class GRGFullAnnotation:
                 continue
 
             # Find bounding box of the segment
-            min_row, min_col = bounding_boxes[key]['bottom'], bounding_boxes[key]['left']
-            max_row, max_col = bounding_boxes[key]['top'], bounding_boxes[key]['right']
+            min_row, min_col = bounding_boxes[key]['top'], bounding_boxes[key]['left']
+            max_row, max_col = bounding_boxes[key]['bottom'], bounding_boxes[key]['right']
             if (min_row <= center_y <= max_row) and (min_col <= center_x <= max_col):
                 grg_key = key
 
@@ -141,11 +148,11 @@ class GRGFullAnnotation:
         # of positions = components as GRG (only consider segments with bounding boxes)
         if grg_key is None:
             max_positions = 0
-            for key, segment in self.seg_dict.items():
+            for key in positions:
                 # Only consider segments that have pixels in the final segmentation map
                 if key not in bounding_boxes:
                     continue
-                curr_positions = len(segment.positions)
+                curr_positions = len(positions[key])
                 if curr_positions > max_positions:
                     max_positions = curr_positions
                     grg_key = key
@@ -158,5 +165,5 @@ class GRGFullAnnotation:
         grg_label = segmentation_mapping[grg_key]
         grg_seg = (seg_map == grg_label).astype(int)
         grg_bbox = bounding_boxes[grg_key]
-        return grg_seg, grg_bbox
-    
+        grg_positions = positions[grg_key]
+        return grg_seg, grg_bbox, grg_positions

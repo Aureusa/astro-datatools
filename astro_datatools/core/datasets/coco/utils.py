@@ -54,7 +54,7 @@ def bbox_to_xywh(bbox: dict) -> list:
     :return: List of bounding box in (x, y, w, h) format.
     :rtype: list
     """
-    x1, y1, x2, y2 = bbox["left"], bbox["top"], bbox["right"], bbox["bottom"]
+    x1, y1, x2, y2 = bbox["left"], bbox["bottom"], bbox["right"], bbox["top"]
     return [x1, y1, x2 - x1, y2 - y1]
 
 def save_coco_image(image: np.ndarray, file_name: str, normalize_per_image: bool = True):

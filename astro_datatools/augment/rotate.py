@@ -16,7 +16,8 @@ class RotateAugment(BaseAugment):
             angles: list[int],
             height_and_width_axes: tuple = (-2, -1),
             dynamic_cropping: bool = True,
-            specific_crop_size: tuple[int, int] = None
+            specific_crop_size: tuple[int, int] = None,
+            verbose: bool = False
         ):
         """
         Initialize the RotateAugment with specified angles.
@@ -43,11 +44,14 @@ class RotateAugment(BaseAugment):
         if self.dynamic_cropping and self.specific_crop_size is not None:
             logger.error("Cannot set both dynamic_cropping and specific_crop_size.")
             raise ValueError("Cannot set both dynamic_cropping and specific_crop_size.")
+        
+        self.verbose = verbose
 
-        info = f"RotateAugment initialized with angles: {self.angles}"
-        info += f"\nDynamic cropping: {self.dynamic_cropping}" if self.dynamic_cropping else ""
-        info += f"\nSpecific crop size: {self.specific_crop_size}" if self.specific_crop_size is not None else ""
-        logger.info(info)
+        if self.verbose:
+            info = f"RotateAugment initialized with angles: {self.angles}"
+            info += f"\nDynamic cropping: {self.dynamic_cropping}" if self.dynamic_cropping else ""
+            info += f"\nSpecific crop size: {self.specific_crop_size}" if self.specific_crop_size is not None else ""
+            logger.info(info)
 
     def augment(self, data: np.ndarray) -> np.ndarray:
         """
@@ -62,7 +66,9 @@ class RotateAugment(BaseAugment):
         h = data.shape[self.height_and_width_axes[0]]
         w = data.shape[self.height_and_width_axes[1]]
 
-        logger.debug(f"Original data shape: {data.shape}")
+        if self.verbose:
+            logger.info(f"Original data shape: {data.shape}")
+            logger.info(f"Height (h): {h}, Width (w): {w}")
 
         # Rotate all angles - this is already reasonably efficient
         augmented_data = [
@@ -84,185 +90,9 @@ class RotateAugment(BaseAugment):
         
         augmented_data = self._crop_center(augmented_data, new_w, new_h)
 
-        logger.debug(f"Augmented data shape after rotation and cropping: {augmented_data.shape}")
+        if self.verbose:
+            logger.info(f"Augmented data shape after rotation and cropping: {augmented_data.shape}")
         return augmented_data
-
-    def augment_bbox(self, bbox: dict[str, int], original_h: int, original_w: int) -> list[dict[str, int]]:
-        """
-        Apply rotation augmentation to a bounding box.
-
-        :param bbox: Bounding box with keys 'top', 'bottom', 'left', 'right'
-        :param original_h: Original image height before rotation
-        :param original_w: Original image width before rotation
-        :return: List of rotated bounding boxes for each angle
-        """
-        # Pre-calculate crop dimensions for each angle to avoid redundant calculation
-        crop_dims = []
-        for angle in self.angles:
-            if self.dynamic_cropping:
-                cropped_w, cropped_h = self.largest_rotated_rect(original_w, original_h, angle)
-            elif self.specific_crop_size is not None:
-                cropped_w, cropped_h = self.specific_crop_size
-            else:
-                cropped_w, cropped_h = original_w, original_h
-            crop_dims.append((cropped_w, cropped_h))
-        
-        rotated_bboxes = [
-            self._rotate_bbox(bbox, angle, original_h, original_w, crop_h, crop_w)
-            for angle, (crop_w, crop_h) in zip(self.angles, crop_dims)
-        ]
-        
-        return rotated_bboxes
-    
-    def augment_proposal_boxes(self, boxes: np.ndarray, original_h: int, original_w: int) -> np.ndarray:
-        """
-        Apply rotation augmentation to multiple boxes in Detectron2 format (vectorized).
-        
-        :param boxes: Array of boxes in [x1, y1, x2, y2] format, shape (N, 4)
-        :type boxes: np.ndarray
-        :param original_h: Original image height before rotation
-        :type original_h: int
-        :param original_w: Original image width before rotation
-        :type original_w: int
-        :return: Rotated boxes for all angles, shape (num_angles, N, 4)
-        :rtype: np.ndarray
-        """
-        num_boxes = boxes.shape[0]
-        num_angles = len(self.angles)
-        
-        # Pre-calculate crop dimensions for each angle
-        crop_dims = []
-        for angle in self.angles:
-            if self.dynamic_cropping:
-                cropped_w, cropped_h = self.largest_rotated_rect(original_w, original_h, angle)
-            elif self.specific_crop_size is not None:
-                cropped_w, cropped_h = self.specific_crop_size
-            else:
-                cropped_w, cropped_h = original_w, original_h
-            crop_dims.append((cropped_w, cropped_h))
-        
-        # Get all 4 corners of all boxes: shape (N, 4, 2)
-        # Scipy rotates in (row, col) = (y, x) space, so store as (y, x)
-        x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
-        corners = np.stack([
-            np.stack([y2, x1], axis=1),  # (y, x) for bottom-left
-            np.stack([y2, x2], axis=1),  # (y, x) for bottom-right
-            np.stack([y1, x2], axis=1),  # (y, x) for top-right
-            np.stack([y1, x1], axis=1),  # (y, x) for top-left
-        ], axis=1)  # Shape: (N, 4, 2) in (y, x) format
-        
-        # Center in (y, x) format to match scipy
-        center = np.array([(original_h - 1) / 2, (original_w - 1) / 2])
-        all_rotated_boxes = []
-        
-        # Process each angle
-        for angle, (crop_w, crop_h) in zip(self.angles, crop_dims):
-            angle_rad = np.radians(angle)
-            cos_a = np.cos(angle_rad)
-            sin_a = np.sin(angle_rad)
-            
-            # Counter-clockwise rotation matrix (matches scipy.ndimage.rotate)
-            rotation_matrix = np.array([
-                [cos_a, -sin_a],
-                [sin_a, cos_a]
-            ])
-            
-            # Rotate all corners of all boxes at once
-            corners_centered = corners - center  # Shape: (N, 4, 2)
-            corners_rotated = corners_centered @ rotation_matrix.T  # Shape: (N, 4, 2)
-            corners_rotated += center
-            
-            # Adjust for cropping
-            crop_offset = np.array([(original_w - crop_w) / 2, (original_h - crop_h) / 2])
-            corners_rotated -= crop_offset
-            
-            # Get axis-aligned bounding boxes from rotated corners (in y,x format)
-            min_coords = corners_rotated.min(axis=1)  # Shape: (N, 2) as (y_min, x_min)
-            max_coords = corners_rotated.max(axis=1)  # Shape: (N, 2) as (y_max, x_max)
-            
-            # Clip to image bounds
-            min_coords = np.maximum(0, np.floor(min_coords)).astype(np.float32)
-            max_coords = np.minimum([crop_h, crop_w], np.ceil(max_coords)).astype(np.float32)
-            
-            # Convert from (y, x) back to (x, y) and combine to [x1, y1, x2, y2] format
-            rotated_boxes = np.stack([
-                min_coords[:, 1],  # x1 from x_min
-                min_coords[:, 0],  # y1 from y_min
-                max_coords[:, 1],  # x2 from x_max
-                max_coords[:, 0]   # y2 from y_max
-            ], axis=1)  # Shape: (N, 4)
-            all_rotated_boxes.append(rotated_boxes)
-        
-        # Stack to (num_angles, N, 4)
-        return np.stack(all_rotated_boxes, axis=0)
-
-    def _rotate_bbox(
-            self,
-            bbox: dict[str, int],
-            angle: float,
-            original_h: int,
-            original_w: int, 
-            cropped_h: int,
-            cropped_w: int
-        ) -> dict[str, int]:
-        """
-        Rotate a bounding box and adjust for cropping.
-        
-        :param bbox: Bounding box with keys 'top', 'bottom', 'left', 'right'
-        :param angle: Rotation angle in degrees
-        :param original_h: Original image height before rotation
-        :param original_w: Original image width before rotation
-        :param cropped_h: Height after rotation and cropping
-        :param cropped_w: Width after rotation and cropping
-        :return: Rotated and cropped bounding box
-        """
-        # Get bbox corners in (y, x) format to match scipy rotation
-        corners = np.array([
-            [bbox['bottom'], bbox['left']],   # (y, x) bottom-left
-            [bbox['bottom'], bbox['right']],  # (y, x) bottom-right
-            [bbox['top'], bbox['right']],     # (y, x) top-right
-            [bbox['top'], bbox['left']]       # (y, x) top-left
-        ])
-        
-        # Rotate around image center in (y, x) format
-        # Center matches scipy.ndimage.rotate: (height-1)/2, (width-1)/2
-        center = np.array([(original_h - 1) / 2, (original_w - 1) / 2])
-        angle_rad = np.radians(angle)
-        cos_a = np.cos(angle_rad)
-        sin_a = np.sin(angle_rad)
-        
-        # Counter-clockwise rotation matrix (matches scipy.ndimage.rotate)
-        rotation_matrix = np.array([
-            [cos_a, -sin_a],
-            [sin_a, cos_a]
-        ])
-        
-        # Translate to origin, rotate, translate back
-        corners_centered = corners - center
-        corners_rotated = corners_centered @ rotation_matrix.T
-        corners_rotated += center
-        
-        # Adjust for cropping (center crop)
-        crop_offset_y = (original_h - cropped_h) / 2
-        crop_offset_x = (original_w - cropped_w) / 2
-        corners_rotated -= np.array([crop_offset_y, crop_offset_x])
-        
-        # Get new axis-aligned bbox from (y, x) corners
-        min_y, min_x = corners_rotated.min(axis=0)
-        max_y, max_x = corners_rotated.max(axis=0)
-        
-        # Clip to image bounds
-        min_x = max(0, int(np.floor(min_x)))
-        min_y = max(0, int(np.floor(min_y)))
-        max_x = min(cropped_w, int(np.ceil(max_x)))
-        max_y = min(cropped_h, int(np.ceil(max_y)))
-        
-        return {
-            'left': min_x,
-            'right': max_x,
-            'bottom': min_y,
-            'top': max_y
-        }
 
     def largest_rotated_rect(self, w: int, h: int, angle: float) -> tuple[int, int]:
         """
