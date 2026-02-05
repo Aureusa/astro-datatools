@@ -63,6 +63,8 @@ class CocoDatasetBuilderBase(ABC):
         :rtype: dict
         """
         result = sample.register_sample()
+        if result is None:
+            return coco
         coco["images"].append(result['image'])
         coco["annotations"].append(result['annotation'])
         return coco

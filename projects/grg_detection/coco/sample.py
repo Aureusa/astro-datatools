@@ -58,6 +58,7 @@ class LoTSS_Sample(CocoSampleBase):
             grg_positions: list[tuple[int, int]],
             all_component_positions: list[tuple[int, int]],
             rotated: bool = False,
+            origin_id: int = None,
             rotation_angle: float = 0.0,
             stretch: str = "sqrt_stretch",
             reprojected: bool = False,
@@ -89,6 +90,7 @@ class LoTSS_Sample(CocoSampleBase):
         self.dec = dec
         self.stretch = stretch
         self.rotated = rotated
+        self.origin_id = origin_id
         self.rotation_angle = rotation_angle
 
         # Redshift and reprojection info
@@ -127,6 +129,8 @@ class LoTSS_Sample(CocoSampleBase):
         :rtype: dict
         """
         annotation = self._register_annotation()  # Assuming data is in the second channel
+        if annotation is None:
+            return None
         image = self._register_image()
         image = self._register_metadata(image)
         self._save_proposals()
@@ -158,7 +162,11 @@ class LoTSS_Sample(CocoSampleBase):
         grg_seg, grg_bbox = self.full_annotation
         area = mask_area(grg_seg)
         segmentation = mask_to_polygon(grg_seg)
-        bbox_xyxy = grg_bbox # bbox_to_xywh(grg_bbox)
+        bbox_xyxy = grg_bbox
+
+        # If no segmentation found or bbox is invalid return None
+        if area == 0 or not segmentation or bbox_xyxy is None:
+            return None
 
         annotation = LoTSS_GRG_CocoAnnotation(
             id=self.id,
@@ -193,6 +201,7 @@ class LoTSS_Sample(CocoSampleBase):
             "grg_positions": self.grg_positions,
             "all_component_positions": self.all_component_positions,
             "rotated": self.rotated,
+            "origin_id": self.origin_id,
             "rotation_angle": self.rotation_angle,
             "stretch": self.stretch,
             "reprojected": self.reprojected,

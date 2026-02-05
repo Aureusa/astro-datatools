@@ -59,7 +59,7 @@ def main(config_path: str):
     CUTOUT_SIZE = config['CUTOUT_PARAMS']['CUTOUT_SIZE']
     CROP_SIZE = config['CUTOUT_PARAMS']['CROP_SIZE']
     RMS = config['CUTOUT_PARAMS']['RMS']
-    
+    NR_SIGMAS = config['CUTOUT_PARAMS']['NR_SIGMAS']
     ROTATION_ANGLES = config['AUGMENTATION']['ROTATION_ANGLES']
     STRETCH_TYPE = config['AUGMENTATION']['STRETCH_TYPE']
     MAX_PRECOMPUTED_ISLANDS = config['AUGMENTATION']['MAX_PRECOMPUTED_ISLANDS']
@@ -114,31 +114,19 @@ def main(config_path: str):
     cutouts = cutouts[:10] # For testing, use only first 100 cutouts
     logger.info(f"Generated {len(cutouts)} cutouts.")
 
-    logger.info("Splitting cutouts into train, val, test sets...")
-    # Split the cutouts into train, val, test randomly
-    np.random.shuffle(cutouts)
-    num_cutouts = len(cutouts)
-    train_end = int(DATASET_SPLITS["train"] * num_cutouts)
-    val_end = train_end + int(DATASET_SPLITS["val"] * num_cutouts)
-    cutouts_splits = {
-        "train": cutouts[:train_end],
-        "val": cutouts[train_end:val_end],
-        "test": cutouts[val_end:]
-    }
-
-    for key, cutouts_split in cutouts_splits.items():
-        GRGDatasetBuilder(
-            cutouts=cutouts_split,
-            component_catalogue=COMPONENT_CATALOGUE,
-            dataset_type=key,
-            rotation_angles=ROTATION_ANGLES,
-            crop_size=CROP_SIZE,
-            max_precomputed_islands=MAX_PRECOMPUTED_ISLANDS,
-            rms=RMS,
-            stretch_type=STRETCH_TYPE,
-            save_dir=DATASET_SAVE_DIR
-        ).build()
-        logger.info(f"Finished building {key} dataset.")
+    logger.info("Building dataset with all cutouts...")
+    GRGDatasetBuilder(
+        cutouts=cutouts,
+        component_catalogue=COMPONENT_CATALOGUE,
+        rotation_angles=ROTATION_ANGLES,
+        crop_size=CROP_SIZE,
+        max_precomputed_islands=MAX_PRECOMPUTED_ISLANDS,
+        nr_sigmas=NR_SIGMAS,
+        rms=RMS,
+        stretch_type=STRETCH_TYPE,
+        save_dir=DATASET_SAVE_DIR
+    ).build()
+    logger.info(f"Finished building the dataset.")
 
     elapsed_time = timeit.default_timer() - start_time
     logger.info(f"Dataset generation pipeline completed successfully in {elapsed_time:.2f} seconds.")

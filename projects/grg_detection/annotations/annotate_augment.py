@@ -95,6 +95,7 @@ def annotate_and_augment(
         dynamic_cropping: bool = True,
         specific_crop_size: tuple[int, int] = None,
         max_precomputed_islands: int = 10,
+        nr_sigmas: int = 3,
         rms: float = 0.1*1e-3,
         asinh_stretch: bool = False
     ) -> np.ndarray:
@@ -154,7 +155,7 @@ def annotate_and_augment(
         dynamic_cropping=dynamic_cropping,
         specific_crop_size=specific_crop_size
     )
-    rotated_data = rotator.augment(data)
+    rotated_data = rotator.augment(data) # (num_angles, height, width) after rotation and cropping
 
     # Next: Augment the positions accordingly - needed to compute segmentation maps and bboxes
     # Pre-calculate crop dimensions for each angle
@@ -179,12 +180,20 @@ def annotate_and_augment(
     # Generate segmentation maps for each angle based on the rotated positions for GRG
     augmented_grg_segm = np.zeros_like(rotated_data, dtype=rotated_data.dtype)
     for i in range(rotated_data.shape[0]):
-        augmented_grg_segm[i] = Segment(positions=rotated_grg_positions[i]).get_segmentation(rotated_data[i])
+        augmented_grg_segm[i] = Segment(
+            positions=rotated_grg_positions[i],
+            nr_sigmas=nr_sigmas,
+            rms=rms
+        ).get_segmentation(rotated_data[i])
 
     # Now for the components segmentation maps
     augmented_seg_map = np.zeros_like(rotated_data, dtype=rotated_data.dtype)
     for i in range(rotated_data.shape[0]):
-        augmented_seg_map[i] = Segment(positions=rotated_all_component_positions[i]).get_segmentation(rotated_data[i])
+        augmented_seg_map[i] = Segment(
+            positions=rotated_all_component_positions[i],
+            nr_sigmas=nr_sigmas,
+            rms=rms
+        ).get_segmentation(rotated_data[i])
 
     # Generate bboxes for all angles that cover the grg_segmentation areas 
     # Get the bounding boxes for each angle by finding x1, y1, x2, y2 (x_min, y_min, x_max, y_max)
@@ -200,6 +209,9 @@ def annotate_and_augment(
             y_min = int(rows.min())
             y_max = int(rows.max())
             augmented_bboxes.append([x_min, y_min, x_max, y_max])
+        else:
+            # No valid segmentation for this angle - append None
+            augmented_bboxes.append(None)
     
     # Generate region proposals for the Masked RCNN model for each angle
     augmented_proposals = []

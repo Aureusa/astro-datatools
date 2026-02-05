@@ -42,6 +42,7 @@ class GRGFinder:
         :return: Tuple containing (grg_positions, all_component_positions) where each is a list of (x, y) tuples.
         :rtype: tuple[list[tuple[int, int]], list[tuple[int, int]]]
         """
+        # TODO: Something is going wrong here, I should never get None, None back
         seg_map, bounding_boxes, positions, sorted_keys = self._segment_and_box()
 
         all_component_positions = []
@@ -166,7 +167,7 @@ class GRGFinder:
 
         # Final validation
         if grg_key is None:
-            return None, None
+            return False
         
         # Return the positions of the identified GRG segment
         grg_positions = positions[grg_key]

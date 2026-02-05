@@ -34,10 +34,10 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
             self,
             cutouts: list,
             component_catalogue: pd.DataFrame,
-            dataset_type: str,
             rotation_angles: list[int],
             crop_size: int,
             max_precomputed_islands: int,
+            nr_sigmas: int,
             rms: float,
             stretch_type: str,
             save_dir: str
@@ -46,15 +46,15 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
         self.component_catalogue = component_catalogue
 
         # Make sure save directory exists
-        self.save_dir = os.path.join(save_dir, dataset_type)
+        self.save_dir = save_dir
         if not os.path.exists(self.save_dir):
             os.makedirs(self.save_dir)
 
-        self.dataset_type = dataset_type
         self.rotation_angles = rotation_angles
         self.crop_size = crop_size
         self.max_precomputed_islands = max_precomputed_islands
         self.rms = rms
+        self.nr_sigmas = nr_sigmas
         self.stretch_type = stretch_type
 
     def _get_filepath(self) -> str:
@@ -72,9 +72,14 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
         try:
             # Get the data and the positions from the cutout
             data = cutout.get_data()
-            grg_positions, all_component_positions = self._get_positions(cutout, data)
+            grg_positions, all_component_positions = self._get_positions(
+                cutout,
+                data,
+                nr_sigmas=self.nr_sigmas,
+                rms=self.rms
+            )
             
-            if grg_positions is None:
+            if grg_positions is False:
                 logger.warning(f"Skipping cutout at RA: {cutout.ra}, DEC: {cutout.dec} - no GRG annotation found.")
                 return
                 
@@ -95,14 +100,28 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
                 specific_crop_size=(self.crop_size, self.crop_size),
                 dynamic_cropping=False,
                 max_precomputed_islands=self.max_precomputed_islands,
+                nr_sigmas=self.nr_sigmas,
                 rms=self.rms,
                 asinh_stretch=False if self.stretch_type == "sqrt_stretch" else True
             )
 
             # Create and register samples for all rotations
+            origin_id = None  # Will be set to the ID of the first valid sample
+            
             for angle_index, angle in enumerate(self.rotation_angles):
-                # Deterministic ID calculation
-                sample_id = cutout_index * len(self.rotation_angles) + angle_index + 1
+                # Skip this rotation if bbox is None (no valid segmentation)
+                if rotated_grg_bboxes[angle_index] is None:
+                    logger.debug(f"Skipping rotation {angle}° for cutout {cutout_index} - no valid bbox")
+                    continue
+                
+                # Get next sequential ID (thread-safe)
+                with coco_lock:
+                    sample_id = self.next_id
+                    self.next_id += 1
+                    
+                    # Set origin_id to the first valid sample ID for this cutout
+                    if origin_id is None:
+                        origin_id = sample_id
                 
                 sample = LoTSS_Sample(
                     id=sample_id,
@@ -117,6 +136,7 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
                     grg_positions=rotated_grg_positions[angle_index],
                     all_component_positions=rotated_all_component_positions[angle_index],
                     rotated=True if angle != 0 else False,
+                    origin_id=origin_id,
                     rotation_angle=angle,
                     stretch=self.stretch_type,
                     reprojected=False,
@@ -151,8 +171,11 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
         images_dir = os.path.join(self.save_dir, "images")
         os.makedirs(images_dir, exist_ok=True)
         
-        # Thread-safe lock for COCO dict updates
+        # Thread-safe lock for COCO dict updates and ID counter
         coco_lock = threading.Lock()
+        
+        # Shared counter for sequential IDs (no gaps)
+        self.next_id = 1
         
         # Process cutouts in parallel with ThreadPoolExecutor
         max_workers = min(os.cpu_count() or 1, 10)  # Limit to 10 workers
@@ -171,7 +194,7 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
                 future_to_index[future] = cutout_index
             
             # Wait for all to complete with progress bar
-            with tqdm(total=len(self.cutouts), desc=f"Generating LoTSS Samples for COCO '{self.dataset_type}' Dataset") as pbar:
+            with tqdm(total=len(self.cutouts), desc=f"Generating LoTSS Samples for COCO Dataset") as pbar:
                 for future in as_completed(future_to_index):
                     cutout_index = future_to_index[future]
                     try:
@@ -183,7 +206,12 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
                         
         return coco
 
-    def _convert_ao_dict_to_segment_dict(self, ao_dict):
+    def _convert_ao_dict_to_segment_dict(
+            self,
+            ao_dict,
+            nr_sigmas: int = 3,
+            rms: float = 0.1*1e-3
+        ):
         """
         Convert a dictionary of AstroObject instances to a dictionary of Segment instances.
         This is the plug that connects AstroObject with Segment, effectively translating
@@ -195,10 +223,20 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
         segment_dict = {}
         for obj_id, astro_obj in ao_dict.items():
             x_y_pos = astro_obj.get_pixel_positions()
-            segment_dict[obj_id] = Segment(x_y_pos, nr_sigmas=5)
+            segment_dict[obj_id] = Segment(
+                x_y_pos,
+                nr_sigmas=nr_sigmas,
+                rms=rms
+            )
         return segment_dict
 
-    def _get_positions(self, curr_cutout, data: np.ndarray) -> tuple[np.ndarray, dict[str, int]]:
+    def _get_positions(
+            self,
+            curr_cutout,
+            data: np.ndarray,
+            nr_sigmas: int = 3,
+            rms: float = 0.1*1e-3
+        ) -> tuple[np.ndarray, dict[str, int]]:
         # Create CutoutCatalogue for the current cutout
         cutout_cat = CutoutCatalogue(
             catalogue=self.component_catalogue,
@@ -207,6 +245,6 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
         )
         # Creates a dict of AstroObject instances for each unique object in the cutout
         ao_dict = cutout_cat.get_astro_objects_from_catalogue()
-        segment_dict = self._convert_ao_dict_to_segment_dict(ao_dict)
+        segment_dict = self._convert_ao_dict_to_segment_dict(ao_dict, nr_sigmas=nr_sigmas, rms=rms)
         return GRGFinder(seg_dict=segment_dict, data=data).get_positions()
     

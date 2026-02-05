@@ -12,6 +12,7 @@ CUTOUT_PARAMS:
   CUTOUT_SIZE: 425 # pixels - this gives us 300 pixels after rotation of 45 degrees
   CROP_SIZE: 300 # pixels - final size after rotation and cropping
   RMS: 0.0001
+  NR_SIGMAS: 3 # Number of sigmas above RMS to consider for source segmentation
 
 AUGMENTATION:
   STRETCH_TYPE: "sqrt_stretch" # to keep consistency with previous work by Moesterd et al.
