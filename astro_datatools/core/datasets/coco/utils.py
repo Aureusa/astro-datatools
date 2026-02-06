@@ -1,6 +1,22 @@
 import cv2
 import numpy as np
+from pycocotools import mask as mask_utils
 
+
+def mask_to_rle(mask: np.ndarray) -> dict:
+    """
+    Convert binary mask to COCO RLE format.
+    More efficient for complex segmentations.
+    
+    :param mask: 2D numpy array (H, W)
+    :return: RLE-encoded mask
+    """
+    # Ensure Fortran-contiguous order
+    mask_fortran = np.asfortranarray(mask.astype(np.uint8))
+    rle = mask_utils.encode(mask_fortran)
+    # Decode bytes to string for JSON serialization
+    rle['counts'] = rle['counts'].decode('utf-8')
+    return rle
 
 def mask_to_polygon(mask: np.ndarray) -> list:
     """
