@@ -15,11 +15,19 @@ CUTOUT_PARAMS:
   NR_SIGMAS: 3 # Number of sigmas above RMS to consider for source segmentation
 
 AUGMENTATION:
-  STRETCH_TYPE: "sqrt_stretch" # to keep consistency with previous work by Moesterd et al.
-  ROTATION_ANGLES: [0, 45, 90, 135, 180, 225, 270, 315] # degrees
+  # to keep consistency with previous work by Moesterd et al.
+  # It is possible to use 'asinh_stretch' as well
+  STRETCH_TYPE: "sqrt_stretch"
+
+  # Angles in degrees to rotate the cutouts for data augmentation. 0 means no rotation.
+  ROTATION_ANGLES: [0, 45, 90, 135, 180, 225, 270, 315]
   
   # Limits the number of islands to precompute per cutout.
   # This limits the number of precomputed proposals we get for the RCNN model.
   # The number of proposals is equal to 2^n - 1, where n is the number of islands.
   MAX_PRECOMPUTED_ISLANDS: 10
 
+ANNOTATIONS:
+  # "rle" or "polygon" - rle is better for astro images.
+  # Polygons approximate shapes while RLE has exact pixel-level accuracy.
+  SEGMENTATION_MODE: "rle" 

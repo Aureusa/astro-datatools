@@ -6,7 +6,9 @@ from astro_datatools.core.datasets.coco.annotation import CocoAnnotationBase
 from astro_datatools.core.datasets.coco.category import CocoCategoryBase
 from astro_datatools.core.datasets.coco.image import CocoImageBase
 from astro_datatools.core.datasets.coco.sample import CocoSampleBase
-from astro_datatools.core.datasets.coco.utils import mask_area, mask_to_polygon, save_coco_image
+from astro_datatools.core.datasets.coco.utils import (
+    mask_area, mask_to_polygon, save_coco_image, mask_to_rle
+)
 
 
 @dataclass
@@ -61,6 +63,7 @@ class LoTSS_Sample(CocoSampleBase):
             origin_id: int = None,
             rotation_angle: float = 0.0,
             stretch: str = "sqrt_stretch",
+            segmentation_mode: str = "rle",
             reprojected: bool = False,
             old_redshift: float = None,
             new_redshift: float = None,
@@ -84,6 +87,7 @@ class LoTSS_Sample(CocoSampleBase):
         # Annotation handling
         self.full_annotation = full_annotation
         self.iscrowd = iscrowd
+        self.segmentation_mode = segmentation_mode
 
         # Metadata specific to LoTSS
         self.ra = ra
@@ -161,7 +165,12 @@ class LoTSS_Sample(CocoSampleBase):
     def _register_annotation(self) -> LoTSS_GRG_CocoAnnotation:
         grg_seg, grg_bbox = self.full_annotation
         area = mask_area(grg_seg)
-        segmentation = mask_to_polygon(grg_seg)
+        if self.segmentation_mode == "rle":
+            segmentation = mask_to_rle(grg_seg)
+        elif self.segmentation_mode == "polygon":
+            segmentation = mask_to_polygon(grg_seg)
+        else:
+            raise ValueError(f"Invalid segmentation mode: {self.segmentation_mode}. Must be 'rle' or 'polygon'.")
         bbox_xyxy = grg_bbox
 
         # If no segmentation found or bbox is invalid return None

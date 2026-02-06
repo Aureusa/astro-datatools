@@ -14,6 +14,8 @@ from astro_datatools.core.datasets.coco.builder import CocoDatasetBuilderBase
 
 from .sample import LoTSS_Sample
 from .category import LoTSS_GRG_CocoCategory
+from .clean import COCODatasetCleaner
+from .evaluator import GTEvaluator
 
 # Append project path for local imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
@@ -40,10 +42,19 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
             nr_sigmas: int,
             rms: float,
             stretch_type: str,
+            segmentation_mode: str,
             save_dir: str
         ):
         self.cutouts = cutouts
         self.component_catalogue = component_catalogue
+
+        if stretch_type not in ["sqrt_stretch", "asinh_stretch"]:
+            raise ValueError(f"Invalid stretch type: {stretch_type}. Must be 'sqrt_stretch' or 'asinh_stretch'.")
+
+        if segmentation_mode not in ["rle", "polygon"]:
+            raise ValueError(f"Invalid segmentation mode: {segmentation_mode}. Must be 'rle' or 'polygon'.")
+
+        self.segmentation_mode = segmentation_mode
 
         # Make sure save directory exists
         self.save_dir = save_dir
@@ -56,6 +67,39 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
         self.rms = rms
         self.nr_sigmas = nr_sigmas
         self.stretch_type = stretch_type
+
+    def build(self) -> dict:
+        """
+        Build the COCO dataset by generating samples, categories, and saving to a JSON file.
+
+        :return: Dictionary representing the COCO dataset.
+        :rtype: dict
+        """
+        coco = super().build()
+
+        # Clean the dataset using COCODatasetCleaner
+        logger.info("Cleaning the COCO dataset...")
+        filepath_for_coco = self._get_filepath()
+        cleaner = COCODatasetCleaner(
+            coco, filepath_for_coco, filepath_for_coco
+        )
+        coco, _, updated_images_ids, removed_images_ids = cleaner.clean(
+            save_cleaned_dataset=True
+        )
+        logger.info(f"Removed {len(removed_images_ids)} images without annotations.")
+        logger.info(f"Updated {len(updated_images_ids)} images with new annotations.")
+
+        # Evaluate against ground truth, should get perfect scores after cleaning
+        logger.info("Evaluating the COCO dataset against ground truth...")
+        gt_evaluator = GTEvaluator(coco, filepath_for_coco)
+        results = gt_evaluator.evaluate()
+        if isinstance(results, dict):
+            info = "Results of evaluation against ground truth:\n"
+            for key, value in results.items():
+                info += f"{key}: {value}\n"
+            logger.info(info)
+
+        return coco
 
     def _get_filepath(self) -> str:
         return os.path.join(self.save_dir, "annotations.json")
@@ -139,6 +183,7 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
                     origin_id=origin_id,
                     rotation_angle=angle,
                     stretch=self.stretch_type,
+                    segmentation_mode=self.segmentation_mode,
                     reprojected=False,
                     old_redshift=None,
                     new_redshift=None,

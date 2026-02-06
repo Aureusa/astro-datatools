@@ -63,6 +63,8 @@ def main(config_path: str):
     ROTATION_ANGLES = config['AUGMENTATION']['ROTATION_ANGLES']
     STRETCH_TYPE = config['AUGMENTATION']['STRETCH_TYPE']
     MAX_PRECOMPUTED_ISLANDS = config['AUGMENTATION']['MAX_PRECOMPUTED_ISLANDS']
+
+    SEGMENTATION_MODE = config['ANNOTATIONS']['SEGMENTATION_MODE']
     
     # Setup logging
     log_filepath = os.path.join(DATASET_SAVE_DIR, "dataset_pipeline.log")
@@ -91,6 +93,9 @@ def main(config_path: str):
     # Load the discovered giants catalogue
     logger.info(f"Loading giants catalog from: {GIANTS_CATALOG_FILEPATH}")
     GIANTS_CATALOG = pd.read_csv(GIANTS_CATALOG_FILEPATH)
+
+    # From the GIANTS CATALOG get only 'RGZ (Hardcastle et al. 2023)' from the 'Ref' column
+    GIANTS_CATALOG = GIANTS_CATALOG[GIANTS_CATALOG['Ref'] == 'RGZ (Hardcastle et al. 2023)'].reset_index(drop=True)
     
     # Load the component catalogue
     logger.info(f"Loading component catalog from: {COMPONENT_CATALOGUE_FILEPATH}")
@@ -101,7 +106,7 @@ def main(config_path: str):
     RA_DEC_LIST = list(
         zip(GIANTS_CATALOG["RAJ2000"].values, GIANTS_CATALOG["DEJ2000"].values)
     )
-    RA_DEC_LIST = RA_DEC_LIST[:100]  # TODO: Make this configurable or remove for production
+    RA_DEC_LIST = RA_DEC_LIST[:1500]  # TODO: Make this configurable or remove for production
     logger.info(f"Processing {len(RA_DEC_LIST)} sources")
 
     # Create the cutouts
@@ -111,7 +116,7 @@ def main(config_path: str):
         size_pixels = CUTOUT_SIZE,
         save=False
     )
-    cutouts = cutouts[:10] # For testing, use only first 100 cutouts
+    cutouts = cutouts[:1000] # For testing, use only first 100 cutouts
     logger.info(f"Generated {len(cutouts)} cutouts.")
 
     logger.info("Building dataset with all cutouts...")
@@ -124,6 +129,7 @@ def main(config_path: str):
         nr_sigmas=NR_SIGMAS,
         rms=RMS,
         stretch_type=STRETCH_TYPE,
+        segmentation_mode=SEGMENTATION_MODE,
         save_dir=DATASET_SAVE_DIR
     ).build()
     logger.info(f"Finished building the dataset.")
