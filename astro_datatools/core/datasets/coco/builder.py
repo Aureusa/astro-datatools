@@ -33,12 +33,7 @@ class CocoDatasetBuilderBase(ABC):
         coco = self._add_categories(coco)
         self._validate_categories(coco)
 
-        # Generate samples and register them
-        # samples = self._generate_samples()
-        # for samp in tqdm(samples, desc="Registering Samples"):
-        #     result = samp.register_sample()
-        #     coco["images"].append(result['image'])
-        #     coco["annotations"].append(result['annotation'])
+        # Generate samples and register them into the COCO dataset
         coco = self._populate_samples(coco)
 
         logger.info(f"COCO dataset built with {len(coco['images'])} images, "

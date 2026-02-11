@@ -21,7 +21,7 @@ sys.path.append('/home/penchev/strw_lofar_data_utils/')
 from src.pipelines import generate_cutouts
 
 # Setup logger
-logger = logging.getLogger("dataset_generation_pipeline")
+logger = logging.getLogger("dataset_pipeline")
 
 
 def load_config(config_path: str) -> dict:
