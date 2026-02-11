@@ -1,0 +1,34 @@
+PATHS:
+  # This file is used to link components to sources for the annotation procedure
+  COMPONENT_CATALOGUE_FILEPATH: "/net/vdesk/data2/penchev/project_data/data/combined_cat/combined-components-v0.8.fits"
+
+  # Where to save the generated dataset
+  SAVE_DIR: "/net/vdesk/data2/penchev/project_data/search-dataset/"
+
+MOSAICS_TO_CRAWL:
+  MOSAICS_NAME: [
+    'P219+32',
+    'P220+35',
+    'P152+32',
+    'P122+49',
+    'P201+30',
+    'P132+37',
+    'P177+37', 
+    'P124+32'
+  ] # There are 107 GRGs in these mosaics
+  STRIDE: 0.5 # 0.5 stride means 50% overlap between cutouts
+
+CUTOUT_PARAMS:
+  CUTOUT_SIZE: 300 # pixels - this gives us 300 pixels after rotation of 45 degrees
+  RMS: 0.0001
+  NR_SIGMAS: 3 # Number of sigmas above RMS to consider for source segmentation
+
+AUGMENTATION:
+  # to keep consistency with previous work by Moesterd et al.
+  # It is possible to use 'asinh_stretch' as well
+  STRETCH_TYPE: "sqrt_stretch"
+  
+  # Limits the number of islands to precompute per cutout.
+  # This limits the number of precomputed proposals we get for the RCNN model.
+  # The number of proposals is equal to 2^n - 1, where n is the number of islands.
+  MAX_PRECOMPUTED_ISLANDS: 10

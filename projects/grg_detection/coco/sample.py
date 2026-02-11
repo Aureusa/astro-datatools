@@ -232,3 +232,127 @@ class LoTSS_Sample(CocoSampleBase):
         if self.save_image:
             save_coco_image(self.rgb_image, filepath)
     
+
+class LoTSS_Search_Sample(CocoSampleBase):
+    def __init__(
+            self,
+            id: int,
+            image_id: int,
+            category_id: int,
+            ra: float,
+            dec: float,
+            rgb_image: np.ndarray, # RGB image as a numpy array (C, H, W)
+            proposed_boxes: np.ndarray,
+            proposal_scores: np.ndarray,
+            positions: dict[str, list[tuple[int, int]]], # {key: list of (x, y) positions}
+            stretch: str = "sqrt_stretch",
+            iscrowd: int = 0,
+            directory: str = "",
+            save_image: bool = True
+        ):
+        # IDs for the registration
+        self.id = id
+        self.image_id = image_id
+        self.category_id = category_id
+
+        # Image data
+        self.rgb_image = rgb_image
+
+        # Annotation handling
+        self.iscrowd = iscrowd
+
+        # Metadata specific to LoTSS
+        self.ra = ra
+        self.dec = dec
+        self.stretch = stretch
+
+        # Proposed boxes and scores
+        self.proposed_boxes = proposed_boxes
+        self.proposal_scores = proposal_scores
+
+        # Positions of components
+        self.positions = positions
+
+        # Action flags
+        self.save_image = save_image
+        self.image_directory = os.path.join(directory, "images")
+        if not os.path.exists(self.image_directory):
+            os.makedirs(self.image_directory)
+        self.proposal_directory = os.path.join(directory, "proposals")
+        if not os.path.exists(self.proposal_directory):
+            os.makedirs(self.proposal_directory)
+
+    def register_sample(self) -> dict:
+        """
+        Register the sample by creating and returning the COCO annotation, category,
+        image, and metadata objects.
+
+        :return: Dictionary containing the COCO image and annotation objects.
+        The dictionary has the following structure:
+        {
+            'image': LoTSS_GRG_CocoImage,
+            'annotation': LoTSS_GRG_CocoAnnotation
+        }
+        :rtype: dict
+        """
+        image = self._register_image()
+        image = self._register_metadata(image)
+        self._save_proposals()
+
+        return {
+            'image': image.to_dict(),
+            'annotation': []
+        }
+
+    def _generate_proposal_filename(self) -> str:
+        """Generate proposal filename matching the image filename (with .npz extension)."""
+        image_filename = self._generate_image_filename()
+        # Replace .png with .npz
+        return image_filename.replace('.png', '.npz')
+
+    def _save_proposals(self):
+        """Save precomputed proposals in a format compatible with Detectron2."""
+        if self.proposed_boxes is not None and len(self.proposed_boxes) > 0:
+            proposal_filename = self._generate_proposal_filename()
+            proposal_filepath = os.path.join(self.proposal_directory, proposal_filename)
+            
+            np.savez_compressed(
+                proposal_filepath,
+                boxes=self.proposed_boxes,  # (N, 4) in [x1, y1, x2, y2] format
+                scores=self.proposal_scores  # (N,) objectness scores
+            )
+    
+    def _register_image(self) -> LoTSS_GRG_CocoImage:
+        file_name = self._generate_image_filename()
+        full_filepath = os.path.join(self.image_directory, file_name)
+        height, width = self.rgb_image.shape[1], self.rgb_image.shape[2]
+
+        self._save_image(full_filepath)
+
+        image = LoTSS_GRG_CocoImage(
+            id=self.image_id,
+            file_name=file_name,
+            width=width,
+            height=height
+        )
+        return image
+
+    def _register_metadata(self, coco_image: LoTSS_GRG_CocoImage) -> LoTSS_GRG_CocoImage:
+        metadata = {
+            "RA": self.ra.item(),
+            "DEC": self.dec.item(),
+            "positions": self.positions,
+            "stretch": self.stretch,
+        }
+        coco_image.add_metadata(metadata)
+        return coco_image
+
+    def _generate_image_filename(self) -> str:
+        image_id = str(self.image_id).zfill(10)
+        coordinates_suffix = f"_RA{self.ra.item()}_DEC{self.dec.item()}"
+        filename = f"LoTSS_Search_{image_id}{coordinates_suffix}.png"
+        return filename
+    
+    def _save_image(self, filepath: str):
+        if self.save_image:
+            save_coco_image(self.rgb_image, filepath)

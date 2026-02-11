@@ -235,3 +235,38 @@ def annotate_and_augment(
         augmented_proposals,
         augmented_proposal_scores
     )
+
+def augment_and_get_proposals(
+        data: np.ndarray,
+        positions: dict[str, list], # {key: list of (x, y) positions}
+        max_precomputed_islands: int = 10,
+        nr_sigmas: int = 3,
+        rms: float = 0.1*1e-3,
+        asinh_stretch: bool = False
+    ) -> np.ndarray:
+    # Get a list of all component positions from the positions dict
+    all_component_positions = []
+    for key in positions:
+        all_component_positions.extend([positions[key]])
+
+    # Create a Segment instance for the components and get the segmentation map
+    seg_map = Segment(
+        positions=all_component_positions,
+        nr_sigmas=nr_sigmas,
+        rms=rms
+    ).get_segmentation(data)
+
+    
+    # Generate region proposals for the Masked RCNN model
+    proposed_boxes, proposal_scores = proposals_generator(
+        seg_map, max_islands=max_precomputed_islands
+    ).precompute(return_scores=True)
+
+    # Finally we convert the data into RGB image
+    lotss_to_rgba = LotssToRGBAugment(rms_noise=rms, asinh_stretch=asinh_stretch)
+    augmented_data = lotss_to_rgba.augment(data)
+    return (
+        augmented_data,
+        proposed_boxes,
+        proposal_scores,
+    )

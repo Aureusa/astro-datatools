@@ -12,14 +12,14 @@ sys.path.append('/home/penchev/astro-datatools/')
 from astro_datatools.lotss_annotations import Segment
 from astro_datatools.core.datasets.coco.builder import CocoDatasetBuilderBase
 
-from .sample import LoTSS_Sample
+from .sample import LoTSS_Sample, LoTSS_Search_Sample
 from .category import LoTSS_GRG_CocoCategory
 from .clean import COCODatasetCleaner
 from .evaluator import GTEvaluator
 
 # Append project path for local imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-from grg_detection.annotations import annotate_and_augment, GRGFinder
+from grg_detection.annotations import annotate_and_augment, augment_and_get_proposals, GRGFinder
 
 sys.path.append('/home/penchev/strw_lofar_data_utils/')
 from src.core.cutout_maker.cutout_catalogue import CutoutCatalogue
@@ -50,9 +50,6 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
 
         if stretch_type not in ["sqrt_stretch", "asinh_stretch"]:
             raise ValueError(f"Invalid stretch type: {stretch_type}. Must be 'sqrt_stretch' or 'asinh_stretch'.")
-
-        if segmentation_mode not in ["rle", "polygon"]:
-            raise ValueError(f"Invalid segmentation mode: {segmentation_mode}. Must be 'rle' or 'polygon'.")
 
         self.segmentation_mode = segmentation_mode
 
@@ -256,7 +253,7 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
             ao_dict,
             nr_sigmas: int = 3,
             rms: float = 0.1*1e-3
-        ):
+        ) -> dict[str, Segment]:
         """
         Convert a dictionary of AstroObject instances to a dictionary of Segment instances.
         This is the plug that connects AstroObject with Segment, effectively translating
@@ -268,6 +265,8 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
         segment_dict = {}
         for obj_id, astro_obj in ao_dict.items():
             x_y_pos = astro_obj.get_pixel_positions()
+            if isinstance(obj_id, bytes):
+                obj_id = obj_id.decode('utf-8')
             segment_dict[obj_id] = Segment(
                 x_y_pos,
                 nr_sigmas=nr_sigmas,
@@ -292,4 +291,159 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
         ao_dict = cutout_cat.get_astro_objects_from_catalogue()
         segment_dict = self._convert_ao_dict_to_segment_dict(ao_dict, nr_sigmas=nr_sigmas, rms=rms)
         return GRGFinder(seg_dict=segment_dict, data=data).get_positions()
+    
+
+class GRGSearchDatasetBuilder(GRGDatasetBuilder):
+    def __init__(
+            self,
+            cutouts: list,
+            component_catalogue: pd.DataFrame,
+            max_precomputed_islands: int,
+            nr_sigmas: int,
+            rms: float,
+            stretch_type: str,
+            save_dir: str
+        ):
+        super().__init__(
+            cutouts=cutouts,
+            component_catalogue=component_catalogue,
+            rotation_angles=[0],  # No rotation for search dataset
+            crop_size=None,  # No cropping for search dataset
+            max_precomputed_islands=max_precomputed_islands,
+            nr_sigmas=nr_sigmas,
+            rms=rms,
+            stretch_type=stretch_type,
+            segmentation_mode=None,  # No segmentation for search dataset
+            save_dir=save_dir
+        )
+
+    def build(self) -> dict:
+        """
+        Build the COCO dataset by generating samples, categories, and saving to a JSON file.
+
+        :return: Dictionary representing the COCO dataset.
+        :rtype: dict
+        """
+        return CocoDatasetBuilderBase.build(self)
+
+    def _process_single_cutout_thread(self, cutout, cutout_index, coco, coco_lock):
+        """
+        Process a single cutout in a thread and register samples immediately.
+        For search datasets, we don't have annotations.
+        """
+        try:
+            # Get the data and the positions from the cutout
+            data = cutout.get_data()
+            positions = self._get_positions(
+                cutout,
+                nr_sigmas=self.nr_sigmas,
+                rms=self.rms
+            )
+            
+            if len(positions) == 0:
+                logger.warning(f"Skipping cutout at RA: {cutout.ra}, DEC: {cutout.dec} - no radio components found.")
+                return
+                
+            # Annotate and augment the data
+            (
+                augmented_data,
+                proposed_boxes,
+                proposal_scores,
+            ) = augment_and_get_proposals(
+                data=data,
+                positions=positions,
+                max_precomputed_islands=self.max_precomputed_islands,
+                nr_sigmas=self.nr_sigmas,
+                rms=self.rms,
+                asinh_stretch=False if self.stretch_type == "sqrt_stretch" else True
+            )
+
+            # Skip if no valid proposed boxes
+            if proposed_boxes is None or len(proposed_boxes) == 0:
+                logger.debug(f"Skipping cutout {cutout_index} - no valid proposed boxes")
+                return
+            
+            # Get next sequential ID (thread-safe)
+            with coco_lock:
+                sample_id = self.next_id
+                self.next_id += 1
+            
+            sample = LoTSS_Search_Sample(
+                id=sample_id,
+                image_id=sample_id,
+                category_id=1,
+                ra=cutout.ra,
+                dec=cutout.dec,
+                rgb_image=augmented_data,
+                proposed_boxes=proposed_boxes,
+                proposal_scores=proposal_scores,
+                positions=positions,
+                stretch=self.stretch_type,
+                iscrowd=0,
+                directory=self.save_dir,
+                save_image=True
+            )
+            
+            # Register sample with thread-safe lock
+            with coco_lock:
+                coco = self._register_sample(sample, coco)
+
+            # Free memory
+            del data
+            del positions
+            del augmented_data
+            del proposed_boxes
+            del proposal_scores
+            gc.collect()
+            
+        except Exception as e:
+            print(f"\n!!! ERROR in cutout {cutout_index} !!!")
+            print(f"Cutout RA: {cutout.ra}, DEC: {cutout.dec}")
+            if hasattr(cutout, 'mosaic'):
+                print(f"Mosaic: {cutout.mosaic.field_name if hasattr(cutout.mosaic, 'field_name') else 'unknown'}")
+            print(f"Error type: {type(e).__name__}")
+            print(f"Error message: {e}")
+            print("!!!!!!!!!!!!!!!!!!!!!!!!\n")
+            logger.error(f"Error in thread processing cutout {cutout_index}: {e}", exc_info=True)
+
+    def _register_sample(self, sample: LoTSS_Search_Sample, coco: dict) -> dict:
+        """
+        Register a sample into the COCO dataset structure.
+
+        :param sample: The sample to register.
+        :type sample: LoTSS_Search_Sample
+        :param coco: The COCO dataset dictionary to update.
+        :type coco: dict
+        :return: Updated COCO dataset dictionary.
+        :rtype: dict
+        """
+        result = sample.register_sample()
+        if result is None:
+            return coco
+        coco["images"].append(result['image'])
+        return coco
+
+    def _get_positions(
+            self,
+            curr_cutout,
+            nr_sigmas: int = 3,
+            rms: float = 0.1*1e-3
+        ) -> tuple[np.ndarray, dict[str, int]]:
+        # Create CutoutCatalogue for the current cutout
+        cutout_cat = CutoutCatalogue(
+            catalogue=self.component_catalogue,
+            cutout=curr_cutout,
+            source_col="Parent_Source"
+        )
+        # Creates a dict of AstroObject instances for each unique object in the cutout
+        # unique_objects=False gets every component as a separate AstroObject,
+        # which is what we want for search datasets
+        ao_dict = cutout_cat.get_astro_objects_from_catalogue(unique_objects=False)
+        segment_dict = self._convert_ao_dict_to_segment_dict(ao_dict, nr_sigmas=nr_sigmas, rms=rms)
+
+        positions = {}  # {key: list of (x, y) positions}
+        
+        for key, segment in segment_dict.items():
+            positions[key] = segment.positions[0] # Get just the tuple of (x, y) positions for this component
+        return positions
     
