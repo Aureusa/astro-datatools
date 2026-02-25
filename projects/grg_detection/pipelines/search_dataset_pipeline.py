@@ -245,6 +245,8 @@ def main(config_path: str):
     else:
         logger.info("ANNOTATE_POSITIVES is False, skipping the annotation of known GRGs and generating cutouts from the specified mosaics to crawl without annotation.")
         COMPONENT_NAMES = [] # Empty list since we are not annotating known GRGs
+
+    logger.info(f"Crawling the following mosaics: {MOSAICS_TO_CRAWL} with stride: {STRIDE} to generate cutouts for the search dataset.")
     
     # Crawl the specified mosaics and generate cutouts
     cutouts = []

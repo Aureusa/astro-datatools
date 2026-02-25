@@ -11,7 +11,7 @@ PATHS:
 
 MOSAICS_TO_CRAWL:
   # Total cutouts in top 25 mosaics: 327
-  MOSAICS_NAME: ['P217+35'] #, 'P219+32', 'P216+32', 'P152+32', 'P220+35', 'P122+49', 'P145+32', 'P201+30', 'P124+32', 'P132+37', 'P132+42', 'P144+35', 'P158+32', 'P167+40', 'P169+55', 'P174+42', 'P177+37', 'P181+42', 'P184+42', 'P206+37', 'P216+37', 'P219+52', 'P228+30', 'P252+38', 'P112+37']
+  MOSAICS_NAME: ['P217+35', 'P219+32', 'P216+32', 'P152+32', 'P220+35', 'P122+49', 'P145+32', 'P201+30', 'P124+32', 'P132+37', 'P132+42', 'P144+35', 'P158+32', 'P167+40', 'P169+55', 'P174+42', 'P177+37', 'P181+42', 'P184+42', 'P206+37', 'P216+37', 'P219+52', 'P228+30', 'P252+38', 'P112+37']
   STRIDE: 0.5 # 0.5 stride means 50% overlap between cutouts
   ANNOTATE_POSITIVES: True # Whether to annotate the cutouts that contain known GRGs from the catalog
 
