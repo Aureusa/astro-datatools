@@ -270,3 +270,32 @@ def augment_and_get_proposals(
         proposed_boxes,
         proposal_scores,
     )
+
+def annotate(
+        grg_positions: list[tuple[int, int]],
+        data: np.ndarray,
+        nr_sigmas: int = 3,
+        rms: float = 0.1*1e-3
+    ) -> np.ndarray:
+    # Generate segmentation maps for each angle based on the rotated positions for GRG
+    grg_segm = Segment(
+        positions=grg_positions,
+        nr_sigmas=nr_sigmas,
+        rms=rms
+    ).get_segmentation(data)
+
+    # Generate bboxes for all angles that cover the grg_segmentation areas 
+    # Get the bounding boxes for each angle by finding x1, y1, x2, y2 (x_min, y_min, x_max, y_max)
+    # The final product will have shape (num_angles, 4)
+    mask = grg_segm > 0
+    if mask.any():
+        rows, cols = np.where(mask)
+        x_min = int(cols.min())
+        x_max = int(cols.max())
+        y_min = int(rows.min())
+        y_max = int(rows.max())
+        bboxes = [x_min, y_min, x_max, y_max]
+    else:
+        # No valid segmentation for this angle - append None
+        bboxes = None
+    return grg_segm, bboxes

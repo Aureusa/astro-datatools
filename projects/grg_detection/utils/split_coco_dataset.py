@@ -65,6 +65,9 @@ def split_coco_dataset_by_components(
     # Group images by component count
     component_count_groups = defaultdict(list)
     image_id_to_data = {}
+
+    # Get all negative examples
+    negative_image_ids = set()
     
     # First pass: build image_id_to_data for ALL images
     for img in coco_data['images']:
@@ -78,6 +81,12 @@ def split_coco_dataset_by_components(
         # Check if both bbox and segm annotations exist for this image
         has_bbox = any(ann['image_id'] == img['id'] and 'bbox' in ann for ann in coco_data['annotations'])
         has_segm = any(ann['image_id'] == img['id'] and 'segmentation' in ann for ann in coco_data['annotations'])
+
+        if 'metadata' in img and 'negative_sample' in img['metadata']:
+            if img['metadata']['negative_sample']:
+                negative_image_ids.add(img['id'])
+                continue
+
         if not (has_bbox and has_segm):
             logger.warning(f"Image ID {img['id']} is missing bbox or segmentation annotations.")
             continue
@@ -101,13 +110,22 @@ def split_coco_dataset_by_components(
     split_names = list(splits.keys())
     split_ratios = [splits[name] for name in split_names]
     
-    logger.info("Stratified splitting by component count:")
-    component_stats = {}
+    negatives_stats = {}
+    logger.info("Splitting the negative samples:")
+    for split_name, ratio in splits.items():
+        n_negatives = len(negative_image_ids)
+        n_split_negatives = int(n_negatives * ratio)
+        split_negative_ids = np.random.choice(list(negative_image_ids), size=n_split_negatives, replace=False)
+        split_image_ids[split_name].extend(split_negative_ids.tolist())
+        negatives_stats[f'negatives_{split_name}'] = len(split_negative_ids)
+        negatives_stats[f'negatives_total'] = n_negatives
+    split_info = " | ".join([f"{name}: {negatives_stats[f'negatives_{name}']} negatives" for name in split_names])
+    logger.info(f"Total negative samples {negatives_stats['negatives_total']} -> {split_info}")
     
-    for component_count, image_ids in tqdm(
-        sorted(component_count_groups.items()), 
-        desc="Splitting by component count"
-    ):
+    component_stats = {}
+
+    logger.info("Stratified splitting by component count:")
+    for component_count, image_ids in component_count_groups.items():
         # Shuffle the image IDs for this component count
         image_ids = np.array(image_ids)
         np.random.shuffle(image_ids)

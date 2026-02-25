@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from tqdm import tqdm
+import numpy as np
 import json
 import logging
 
@@ -8,6 +9,40 @@ from .category import CocoCategoryBase
 
 
 logger = logging.getLogger(__name__)
+
+def _find_non_serializable(obj, path="root", out=None, max_items=50):
+    if out is None:
+        out = []
+    if len(out) >= max_items:
+        return out
+
+    # Fast path: if json can encode it, skip recursion
+    try:
+        json.dumps(obj)
+        return out
+    except TypeError:
+        pass
+
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            _find_non_serializable(v, f"{path}[{repr(k)}]", out, max_items)
+            if len(out) >= max_items:
+                break
+        return out
+
+    if isinstance(obj, (list, tuple)):
+        for i, v in enumerate(obj):
+            _find_non_serializable(v, f"{path}[{i}]", out, max_items)
+            if len(out) >= max_items:
+                break
+        return out
+
+    typename = type(obj).__name__
+    detail = ""
+    if np is not None and isinstance(obj, np.ndarray):
+        detail = f" shape={obj.shape} dtype={obj.dtype}"
+    out.append(f"{path}: {typename}{detail}")
+    return out
 
 
 class CocoDatasetBuilderBase(ABC):
@@ -40,9 +75,16 @@ class CocoDatasetBuilderBase(ABC):
                     f"{len(coco['annotations'])} annotations, "
                     f"and {len(coco['categories'])} categories.")
 
-        # Save COCO dataset as JSON
-        with open(filepath, 'w') as f:
-            json.dump(coco, f, indent=4)
+        try:
+            # Save COCO dataset as JSON
+            with open(filepath, 'w') as f:
+                json.dump(coco, f, indent=4)
+        except TypeError as e:
+            bad = _find_non_serializable(coco)
+            print("\n[DEBUG] Non-serializable objects found in COCO dataset:")
+            for line in bad:
+                print(f"  - {line}")
+            raise TypeError(f"Failed to serialize COCO dataset to JSON: {e}")
 
         return coco
 

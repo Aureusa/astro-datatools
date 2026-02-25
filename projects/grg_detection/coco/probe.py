@@ -13,6 +13,8 @@ class COCOProbe:
         """
         ann_ids = self.coco.getAnnIds(imgIds=[image_dict['id']], iscrowd=None)
         anns = self.coco.loadAnns(ann_ids)
+        if not anns:
+            return None
         mask = self.coco.annToMask(anns[0])
         return mask
     

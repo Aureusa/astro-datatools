@@ -19,6 +19,12 @@ class COCODatasetCleaner(COCOProbe):
         updated_images = []
         for image in self.annotations['images']:
             mask = self._get_mask_from_annotations(image)
+            if mask is None:
+                # No annotations for this image
+                # in our context this is a negative sample,
+                # so we keep it in the dataset without any cleaning.
+                updated_images.append(image)
+                continue
             grg_components = self._extract_gt_components(image)
             all_components = self._extract_all_components(image)
             non_grg_components = self._remove_grg_from_all_components(all_components, grg_components)

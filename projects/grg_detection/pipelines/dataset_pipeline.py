@@ -51,18 +51,27 @@ def main(config_path: str):
     # Load configuration
     config = load_config(config_path)
     
-    # Extract configuration values
+    # Extract configuration values for PATHS
     GIANTS_CATALOG_FILEPATH = config['PATHS']['GIANTS_CATALOG_FILEPATH']
     COMPONENT_CATALOGUE_FILEPATH = config['PATHS']['COMPONENT_CATALOGUE_FILEPATH']
     DATASET_SAVE_DIR = config['PATHS']['SAVE_DIR']
     
+    # Extract configuration values for CUTOUT_PARAMS
     CUTOUT_SIZE = config['CUTOUT_PARAMS']['CUTOUT_SIZE']
     CROP_SIZE = config['CUTOUT_PARAMS']['CROP_SIZE']
     RMS = config['CUTOUT_PARAMS']['RMS']
     NR_SIGMAS = config['CUTOUT_PARAMS']['NR_SIGMAS']
+
+    # Extract configuration values for AUGMENTATION
+    CLASS_RATIO = config['AUGMENTATION']['CLASS_RATIO']
     ROTATION_ANGLES = config['AUGMENTATION']['ROTATION_ANGLES']
     STRETCH_TYPE = config['AUGMENTATION']['STRETCH_TYPE']
     MAX_PRECOMPUTED_ISLANDS = config['AUGMENTATION']['MAX_PRECOMPUTED_ISLANDS']
+
+    # Extract configuration values for PIPELINE
+    WORKERS = config['PIPELINE']['WORKERS']
+    LIMIT_RADEC_LIST = config['PIPELINE']['LIMIT_RADEC_LIST']
+    LIMIT_CUTOUTS = config['PIPELINE']['LIMIT_CUTOUTS']
 
     SEGMENTATION_MODE = config['ANNOTATIONS']['SEGMENTATION_MODE']
     
@@ -94,8 +103,8 @@ def main(config_path: str):
     logger.info(f"Loading giants catalog from: {GIANTS_CATALOG_FILEPATH}")
     GIANTS_CATALOG = pd.read_csv(GIANTS_CATALOG_FILEPATH)
 
-    # From the GIANTS CATALOG get only 'RGZ (Hardcastle et al. 2023)' from the 'Ref' column
-    GIANTS_CATALOG = GIANTS_CATALOG[GIANTS_CATALOG['Ref'] == 'RGZ (Hardcastle et al. 2023)'].reset_index(drop=True)
+    # From the GIANTS CATALOG get only 'Hardcastle et al. 2023' from the 'Ref' column
+    GIANTS_CATALOG = GIANTS_CATALOG[GIANTS_CATALOG['Ref'] == 'Hardcastle et al. 2023'].reset_index(drop=True)
     
     # Load the component catalogue
     logger.info(f"Loading component catalog from: {COMPONENT_CATALOGUE_FILEPATH}")
@@ -106,7 +115,7 @@ def main(config_path: str):
     RA_DEC_LIST = list(
         zip(GIANTS_CATALOG["RAJ2000"].values, GIANTS_CATALOG["DEJ2000"].values)
     )
-    RA_DEC_LIST = RA_DEC_LIST[:1500]  # TODO: Make this configurable or remove for production
+    RA_DEC_LIST = RA_DEC_LIST[:LIMIT_RADEC_LIST] if LIMIT_RADEC_LIST is not None else RA_DEC_LIST
     logger.info(f"Processing {len(RA_DEC_LIST)} sources")
 
     # Create the cutouts
@@ -116,7 +125,7 @@ def main(config_path: str):
         size_pixels = CUTOUT_SIZE,
         save=False
     )
-    cutouts = cutouts[:1000] # For testing, use only first 100 cutouts
+    cutouts = cutouts[:LIMIT_CUTOUTS] if LIMIT_CUTOUTS is not None else cutouts
     logger.info(f"Generated {len(cutouts)} cutouts.")
 
     logger.info("Building dataset with all cutouts...")
@@ -130,6 +139,8 @@ def main(config_path: str):
         rms=RMS,
         stretch_type=STRETCH_TYPE,
         segmentation_mode=SEGMENTATION_MODE,
+        class_ratio=CLASS_RATIO,
+        workers=WORKERS,
         save_dir=DATASET_SAVE_DIR
     ).build()
     logger.info(f"Finished building the dataset.")

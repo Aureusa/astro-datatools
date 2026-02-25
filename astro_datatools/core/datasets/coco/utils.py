@@ -99,7 +99,7 @@ def save_coco_image(image: np.ndarray, file_name: str, normalize_per_image: bool
             range_mask = (img_max - img_min) > 1e-8
             image_normalized = np.where(
                 range_mask,
-                (image_hwc - img_min) / (img_max - img_min),
+                (image_hwc - img_min) / (img_max - img_min + 1e-8),
                 0
             )
             # Scale to 16-bit range [0, 65535]

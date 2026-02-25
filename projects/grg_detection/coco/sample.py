@@ -45,7 +45,7 @@ class LoTSS_GRG_CocoImage(CocoImageBase):
         super().__post_init__()
 
 
-class LoTSS_Sample(CocoSampleBase):
+class LoTSS_GRG_Sample(CocoSampleBase):
     def __init__(
             self,
             id: int,
@@ -132,7 +132,7 @@ class LoTSS_Sample(CocoSampleBase):
         }
         :rtype: dict
         """
-        annotation = self._register_annotation()  # Assuming data is in the second channel
+        annotation = self._register_annotation()
         if annotation is None:
             return None
         image = self._register_image()
@@ -231,13 +231,15 @@ class LoTSS_Sample(CocoSampleBase):
     def _save_image(self, filepath: str):
         if self.save_image:
             save_coco_image(self.rgb_image, filepath)
-    
 
+    
 class LoTSS_Search_Sample(CocoSampleBase):
     def __init__(
             self,
             id: int,
             image_id: int,
+            grg_segmentation: np.ndarray,
+            grg_bboxes: list,
             category_id: int,
             ra: float,
             dec: float,
@@ -245,6 +247,8 @@ class LoTSS_Search_Sample(CocoSampleBase):
             proposed_boxes: np.ndarray,
             proposal_scores: np.ndarray,
             positions: dict[str, list[tuple[int, int]]], # {key: list of (x, y) positions}
+            grg_positions: dict[str, list[tuple[int, int]]], # {key: list of (x, y) positions}
+            seg_mode: str = "rle",
             stretch: str = "sqrt_stretch",
             iscrowd: int = 0,
             directory: str = "",
@@ -272,6 +276,12 @@ class LoTSS_Search_Sample(CocoSampleBase):
 
         # Positions of components
         self.positions = positions
+        self.grg_positions = grg_positions
+
+        # Annotations info
+        self.segmentation_mode = seg_mode
+        self.grg_segmentation = grg_segmentation
+        self.grg_bboxes = grg_bboxes
 
         # Action flags
         self.save_image = save_image
@@ -297,12 +307,41 @@ class LoTSS_Search_Sample(CocoSampleBase):
         """
         image = self._register_image()
         image = self._register_metadata(image)
+        annotation = self._register_annotation()
         self._save_proposals()
 
         return {
             'image': image.to_dict(),
-            'annotation': []
+            'annotation': annotation.to_dict() if annotation is not None else None
         }
+
+    def _register_annotation(self) -> LoTSS_GRG_CocoAnnotation:
+        grg_seg, grg_bbox = self.grg_segmentation, self.grg_bboxes
+        if grg_seg is None or grg_bbox is None:
+            return None
+        area = mask_area(grg_seg)
+        if self.segmentation_mode == "rle":
+            segmentation = mask_to_rle(grg_seg)
+        elif self.segmentation_mode == "polygon":
+            segmentation = mask_to_polygon(grg_seg)
+        else:
+            raise ValueError(f"Invalid segmentation mode: {self.segmentation_mode}. Must be 'rle' or 'polygon'.")
+        bbox_xyxy = grg_bbox
+
+        # If no segmentation found or bbox is invalid return None
+        if area == 0 or not segmentation or bbox_xyxy is None:
+            return None
+
+        annotation = LoTSS_GRG_CocoAnnotation(
+            id=self.id,
+            image_id=self.image_id,
+            category_id=self.category_id,
+            bbox=bbox_xyxy,
+            area=area,
+            segmentation=segmentation,
+            iscrowd=self.iscrowd
+        )
+        return annotation
 
     def _generate_proposal_filename(self) -> str:
         """Generate proposal filename matching the image filename (with .npz extension)."""
@@ -339,9 +378,72 @@ class LoTSS_Search_Sample(CocoSampleBase):
 
     def _register_metadata(self, coco_image: LoTSS_GRG_CocoImage) -> LoTSS_GRG_CocoImage:
         metadata = {
-            "RA": self.ra.item(),
-            "DEC": self.dec.item(),
+            "RA": self.ra,
+            "DEC": self.dec,
             "positions": self.positions,
+            "stretch": self.stretch,
+        }
+        if self.grg_segmentation is not None and self.grg_bboxes is not None:
+            metadata["grg_in_sample"] = True
+        if self.grg_positions is not None and len(self.grg_positions) > 0:
+            metadata["grg_positions"] = self.grg_positions
+        coco_image.add_metadata(metadata)
+        return coco_image
+
+    def _generate_image_filename(self) -> str:
+        image_id = str(self.image_id).zfill(10)
+        coordinates_suffix = f"_RA{self.ra}_DEC{self.dec}"
+        filename = f"LoTSS_Search_{image_id}{coordinates_suffix}.png"
+        return filename
+    
+    def _save_image(self, filepath: str):
+        if self.save_image:
+            save_coco_image(self.rgb_image, filepath)
+
+
+class LoTSS_Negative_GRG_Sample(LoTSS_Search_Sample):
+    def __init__(
+            self,
+            id: int,
+            image_id: int,
+            category_id: int,
+            ra: float,
+            dec: float,
+            rgb_image: np.ndarray, # RGB image as a numpy array (C, H, W)
+            proposed_boxes: np.ndarray,
+            proposal_scores: np.ndarray,
+            positions: dict[str, list[tuple[int, int]]], # {key: list of (x, y) positions}
+            stretch: str = "sqrt_stretch",
+            iscrowd: int = 0,
+            directory: str = "",
+            save_image: bool = True
+        ):
+        super().__init__(
+            id=id,
+            image_id=image_id,
+            grg_segmentation=None,
+            grg_bboxes=None,
+            category_id=category_id,
+            ra=ra,
+            dec=dec,
+            rgb_image=rgb_image,
+            proposed_boxes=proposed_boxes,
+            proposal_scores=proposal_scores,
+            positions=positions,
+            grg_positions=[], # No GRG positions for negative samples
+            seg_mode="rle", # Negative samples won't have GRG annotations, but we can still use RLE for consistency
+            stretch=stretch,
+            iscrowd=iscrowd,
+            directory=directory,
+            save_image=save_image
+        )
+
+    def _register_metadata(self, coco_image: LoTSS_GRG_CocoImage) -> LoTSS_GRG_CocoImage:
+        metadata = {
+            "RA": self.ra,
+            "DEC": self.dec,
+            "positions": self.positions,
+            "negative_sample": True,
             "stretch": self.stretch,
         }
         coco_image.add_metadata(metadata)
@@ -349,10 +451,6 @@ class LoTSS_Search_Sample(CocoSampleBase):
 
     def _generate_image_filename(self) -> str:
         image_id = str(self.image_id).zfill(10)
-        coordinates_suffix = f"_RA{self.ra.item()}_DEC{self.dec.item()}"
-        filename = f"LoTSS_Search_{image_id}{coordinates_suffix}.png"
+        coordinates_suffix = f"_RA{self.ra}_DEC{self.dec}"
+        filename = f"LoTSS_Negative_GRG_{image_id}{coordinates_suffix}.png"
         return filename
-    
-    def _save_image(self, filepath: str):
-        if self.save_image:
-            save_coco_image(self.rgb_image, filepath)
