@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "astro-datatools"
+version = "0.1.0"
+description = "Astronomy-focused data processing toolkit for FITS workflows and dataset generation."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+  { name = "astro-datatools contributors" }
+]
+dependencies = [
+  "numpy",
+  "pandas",
+  "astropy",
+  "scipy",
+  "scikit-image",
+  "opencv-python",
+  "pycocotools",
+  "Pillow",
+  "tqdm",
+  "PyYAML"
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = [".", "projects"]
+include = ["astro_datatools*", "grg_detection*"]

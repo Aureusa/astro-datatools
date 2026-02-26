@@ -1,7 +1,6 @@
 import numpy as np
 import json
 from copy import deepcopy
-import os
 
 from .probe import COCOProbe
 

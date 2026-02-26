@@ -1,4 +1,3 @@
-import sys
 import pandas as pd
 from tqdm import tqdm
 import numpy as np
@@ -8,7 +7,6 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
-sys.path.append('/home/penchev/astro-datatools/')
 from astro_datatools.lotss_annotations import Segment
 from astro_datatools.core.datasets.coco.builder import CocoDatasetBuilderBase
 
@@ -17,13 +15,11 @@ from .category import LoTSS_GRG_CocoCategory
 from .clean import COCODatasetCleaner
 from .evaluator import GTEvaluator
 
-# Append project path for local imports
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from grg_detection.annotations import annotate_and_augment, augment_and_get_proposals, annotate, GRGFinder
 
-sys.path.append('/home/penchev/strw_lofar_data_utils/')
-from src.core.cutout_maker.cutout_catalogue import CutoutCatalogue
-from src.core.cutout_maker.make_cutout import make_cutout
+from strw_lofar_data_utils.core.cutout_maker.cutout_catalogue import CutoutCatalogue
+from strw_lofar_data_utils.core.cutout_maker.make_cutout import make_cutout
+from strw_lofar_data_utils.core.cutout_maker.source_blob import SourceBlob
 
 
 logger = logging.getLogger("GRGDatasetBuilder")
@@ -379,23 +375,23 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
                         
         return coco
 
-    def _convert_ao_dict_to_segment_dict(
+    def _convert_sb_dict_to_segment_dict(
             self,
-            ao_dict,
+            sb_dict: dict[str, SourceBlob],
             nr_sigmas: int = 3,
             rms: float = 0.1*1e-3
         ) -> dict[str, Segment]:
         """
-        Convert a dictionary of AstroObject instances to a dictionary of Segment instances.
-        This is the plug that connects AstroObject with Segment, effectively translating
-        the pixel positions of AstroObjects into Segments for segmentation mapping.
+        Convert a dictionary of SourceBlob instances to a dictionary of Segment instances.
+        This is the plug that connects SourceBlob with Segment, effectively translating
+        the pixel positions of SourceBlob instances into Segments for segmentation mapping.
         
-        :param ao_dict: Dictionary of AstroObject instances
+        :param sb_dict: Dictionary of SourceBlob instances
         :return: Dictionary of Segment instances
         """
         segment_dict = {}
-        for obj_id, astro_obj in ao_dict.items():
-            x_y_pos = astro_obj.get_pixel_positions()
+        for obj_id, source_blob in sb_dict.items():
+            x_y_pos = source_blob.get_pixel_positions()
             if isinstance(obj_id, bytes):
                 obj_id = obj_id.decode('utf-8')
             segment_dict[obj_id] = Segment(
@@ -418,9 +414,9 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
             cutout=curr_cutout,
             source_col="Parent_Source"
         )
-        # Creates a dict of AstroObject instances for each unique object in the cutout
-        ao_dict = cutout_cat.get_astro_objects_from_catalogue()
-        segment_dict = self._convert_ao_dict_to_segment_dict(ao_dict, nr_sigmas=nr_sigmas, rms=rms)
+        # Creates a dict of SourceBlob instances for each unique object in the cutout
+        sb_dict = cutout_cat.get_source_blobs_from_catalogue()
+        segment_dict = self._convert_sb_dict_to_segment_dict(sb_dict, nr_sigmas=nr_sigmas, rms=rms)
         return GRGFinder(seg_dict=segment_dict, data=data).get_positions()
     
     def _get_positions_negative_grg(
@@ -435,11 +431,11 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
             cutout=curr_cutout,
             source_col="Parent_Source"
         )
-        # Creates a dict of AstroObject instances for each unique object in the cutout
-        # unique_objects=False gets every component as a separate AstroObject,
+        # Creates a dict of SourceBlob instances for each unique object in the cutout
+        # unique_objects=False gets every component as a separate SourceBlob,
         # which is what we want for search datasets
-        ao_dict = cutout_cat.get_astro_objects_from_catalogue(unique_objects=False)
-        segment_dict = self._convert_ao_dict_to_segment_dict(ao_dict, nr_sigmas=nr_sigmas, rms=rms)
+        sb_dict = cutout_cat.get_source_blobs_from_catalogue(unique_objects=False)
+        segment_dict = self._convert_sb_dict_to_segment_dict(sb_dict, nr_sigmas=nr_sigmas, rms=rms)
 
         positions = {}  # {key: list of (x, y) positions}
         
@@ -617,8 +613,8 @@ class GRGSearchDatasetBuilder(GRGDatasetBuilder):
         # Creates a dict of AstroObject instances for each unique object in the cutout
         # unique_objects=False gets every component as a separate AstroObject,
         # which is what we want for search datasets
-        ao_dict = cutout_cat.get_astro_objects_from_catalogue(unique_objects=False)
-        segment_dict = self._convert_ao_dict_to_segment_dict(ao_dict, nr_sigmas=nr_sigmas, rms=rms)
+        sb_dict = cutout_cat.get_source_blobs_from_catalogue(unique_objects=False)
+        segment_dict = self._convert_sb_dict_to_segment_dict(sb_dict, nr_sigmas=nr_sigmas, rms=rms)
 
         positions = {}  # {key: list of (x, y) positions}
         

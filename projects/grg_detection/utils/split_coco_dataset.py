@@ -10,8 +10,6 @@ import logging
 import os
 import pandas as pd
 
-# Append astro-datatools path for imports
-sys.path.append('/home/penchev/astro-datatools/')
 from astro_datatools import setup_logging
 
 logger = logging.getLogger("coco_dataset_splitter")

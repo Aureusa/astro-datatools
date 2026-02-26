@@ -3,22 +3,17 @@ import sys
 import timeit
 import pandas as pd
 import numpy as np
-import os
 import logging
 import yaml
 import argparse
 
-# Append astro-datatools path for imports
-sys.path.append('/home/penchev/astro-datatools/')
 from astro_datatools import setup_logging
 
-# Append project path for local imports
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from grg_detection.coco import GRGDatasetBuilder
 
-# Append strw_lofar_data_utils path for imports
-sys.path.append('/home/penchev/strw_lofar_data_utils/')
-from src.pipelines import generate_cutouts
+from strw_lofar_data_utils.pipelines import generate_cutouts
+
+import os
 
 # Setup logger
 logger = logging.getLogger("dataset_pipeline")
@@ -103,8 +98,12 @@ def main(config_path: str):
     logger.info(f"Loading giants catalog from: {GIANTS_CATALOG_FILEPATH}")
     GIANTS_CATALOG = pd.read_csv(GIANTS_CATALOG_FILEPATH)
 
-    # From the GIANTS CATALOG get only 'Hardcastle et al. 2023' from the 'Ref' column
-    GIANTS_CATALOG = GIANTS_CATALOG[GIANTS_CATALOG['Ref'] == 'Hardcastle et al. 2023'].reset_index(drop=True)
+    # From the GIANTS CATALOG get only 'Hardcastle et al. 2023' from the 'FirstDisc' column
+    GIANTS_CATALOG = GIANTS_CATALOG[GIANTS_CATALOG['FirstDisc'] == 'Hardcastle et al. 2023'].reset_index(drop=True)
+    logger.warning(
+        "[BE CAREFUL AND DO NOT IGNORE THIS MESSAGE!]: "
+        "Using only the giants from 'Hardcastle et al. 2023' in the giants catalog!"
+    ) # TODO: REMOVE THIS WARNING IN THE FUTURE WHEN THE GIANTS CATALOG IS FINALIZED AND WE WANT TO USE ALL THE GIANTS!
     
     # Load the component catalogue
     logger.info(f"Loading component catalog from: {COMPONENT_CATALOGUE_FILEPATH}")

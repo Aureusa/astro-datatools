@@ -9,21 +9,16 @@ from tqdm import tqdm
 import yaml
 import argparse
 
-# Append astro-datatools path for imports
-sys.path.append('/home/penchev/astro-datatools/')
 from astro_datatools import setup_logging
 from astro_datatools.lotss_annotations import Segment
 
-# Append project path for local imports
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from grg_detection.coco import GRGSearchDatasetBuilder
 from grg_detection.annotations import GRGFinder
 
-# Append strw_lofar_data_utils path for imports
-sys.path.append('/home/penchev/strw_lofar_data_utils/')
-from src.core.mosaic_crawler import DR2Crawler
-from src.pipelines import generate_cutouts
-from src.core.cutout_maker.cutout_catalogue import CutoutCatalogue
+from strw_lofar_data_utils.core.cutout_maker import SourceBlob, CutoutCatalogue
+from strw_lofar_data_utils.core.mosaic_crawler import DR2Crawler
+from strw_lofar_data_utils.pipelines import generate_cutouts
+
 
 # Setup logger
 logger = logging.getLogger("search_dataset_pipeline")
@@ -43,25 +38,13 @@ def load_config(config_path: str) -> dict:
     return config
 
 def get_annotation_component_names(
-    giants_catalogue_filepath: str,
+    giants_catalog: pd.DataFrame,
     cutout_size: int,
     mosaics_to_crawl: list[str],
     component_catalogue: pd.DataFrame,
     nr_sigmas: int = 3,
     rms: float = 0.1*1e-3
-    ):
-    if giants_catalogue_filepath is None:
-        raise ValueError(
-            "ANNOTATE_POSITIVES is True but GIANTS_CATALOG_FILEPATH is not provided in the config. "
-            "If you want to annotate cutouts with known GRGs, please provide the GIANTS_CATALOG_FILEPATH in the config. "
-            "If you do not want to annotate cutouts with known GRGs, set ANNOTATE_POSITIVES to False in the config."
-        )
-    
-    # Load the discovered giants catalogue
-    logger.info(f"Prapering the annotation of known GRGs using the giants catalog from: {giants_catalogue_filepath}")
-    logger.info(f"Loading giants catalog from: {giants_catalogue_filepath}")
-    giants_catalog = pd.read_csv(giants_catalogue_filepath)
-
+    ):    
     # Get RA and DEC for the giants and create cutouts
     ra_dec_list = list(
         zip(giants_catalog["RAJ2000"].values, giants_catalog["DEJ2000"].values)
@@ -69,7 +52,7 @@ def get_annotation_component_names(
     logger.info("Generating cutouts of known GRGs...")
     giants_cutouts = generate_cutouts(
         ra_dec_list=ra_dec_list,
-        size_pixels = cutout_size,
+        size_pixels=cutout_size,
         save=False
     )
 
@@ -85,21 +68,21 @@ def get_annotation_component_names(
             rms: float = 0.1*1e-3
         ) -> tuple[np.ndarray, dict[str, int]]:
         def _convert_ao_dict_to_segment_dict(
-                ao_dict,
+                sb_dict: dict[str, SourceBlob],
                 nr_sigmas: int = 3,
                 rms: float = 0.1*1e-3
             ) -> dict[str, Segment]:
             """
-            Convert a dictionary of AstroObject instances to a dictionary of Segment instances.
-            This is the plug that connects AstroObject with Segment, effectively translating
-            the pixel positions of AstroObjects into Segments for segmentation mapping.
+            Convert a dictionary of SourceBlob instances to a dictionary of Segment instances.
+            This is the plug that connects SourceBlob with Segment, effectively translating
+            the pixel positions of SourceBlobs into Segments for segmentation mapping.
             
-            :param ao_dict: Dictionary of AstroObject instances
+            :param sb_dict: Dictionary of SourceBlob instances
             :return: Dictionary of Segment instances
             """
             segment_dict = {}
-            for obj_id, astro_obj in ao_dict.items():
-                x_y_pos = astro_obj.get_pixel_positions()
+            for obj_id, source_blob in sb_dict.items():
+                x_y_pos = source_blob.get_pixel_positions()
                 if isinstance(obj_id, bytes):
                     obj_id = obj_id.decode('utf-8')
                 segment_dict[obj_id] = Segment(
@@ -122,9 +105,9 @@ def get_annotation_component_names(
             source_col="Parent_Source"
         )
 
-        # Creates a dict of AstroObject instances for each unique object in the cutout
-        ao_dict = cutout_cat.get_astro_objects_from_catalogue()
-        segment_dict = _convert_ao_dict_to_segment_dict(ao_dict, nr_sigmas=nr_sigmas, rms=rms)
+        # Creates a dict of SourceBlob instances for each unique object in the cutout
+        sb_dict = cutout_cat.get_source_blobs_from_catalogue()
+        segment_dict = _convert_ao_dict_to_segment_dict(sb_dict, nr_sigmas=nr_sigmas, rms=rms)
 
         # Use GRGFinder to get the positions of the GRG components in the cutout based on the segments
         grg_positions, _ = GRGFinder(seg_dict=segment_dict, data=data).get_positions()
@@ -136,9 +119,9 @@ def get_annotation_component_names(
             return []
 
         component_names = []
-        ao_dict2 = cutout_cat.get_astro_objects_from_catalogue(unique_objects=False)
-        for obj, astro_obj in ao_dict2.items():
-            position = astro_obj.get_pixel_positions() # list[tuple[int, int]]
+        sb_dict2 = cutout_cat.get_source_blobs_from_catalogue(unique_objects=False)
+        for obj, source_blob in sb_dict2.items():
+            position = source_blob.get_pixel_positions() # list[tuple[int, int]]
             if _match_components_to_grg_positions(grg_positions, position):
                 if isinstance(obj, bytes):
                     obj = obj.decode('utf-8')
@@ -234,8 +217,23 @@ def main(config_path: str):
     # if ANNOTATE_POSITIVES is True,
     # otherwise skip this step and set COMPONENT_DICT to an empty dictionary
     if ANNOTATE_POSITIVES:
+        if GIANTS_CATALOG_FILEPATH is None:
+            raise ValueError(
+                "ANNOTATE_POSITIVES is True but GIANTS_CATALOG_FILEPATH is not provided in the config. "
+                "If you want to annotate cutouts with known GRGs, please provide the GIANTS_CATALOG_FILEPATH in the config. "
+                "If you do not want to annotate cutouts with known GRGs, set ANNOTATE_POSITIVES to False in the config."
+            )
+        giants_catalog = pd.read_csv(GIANTS_CATALOG_FILEPATH)
+
+        # Remove the giants from "Hardcastle et al. 2023" since they are used for training
+        # TODO: In the future this might need to be changed!
+        giants_catalog = giants_catalog[giants_catalog['FirstDisc'] != 'Hardcastle et al. 2023'].reset_index(drop=True)
+        logger.warning(
+            "[BE CAREFUL AND DO NOT IGNORE THIS MESSAGE!]: "
+            "Removed giants from 'Hardcastle et al. 2023' in the giants catalog since they are used for training. "
+        )
         COMPONENT_NAMES = get_annotation_component_names(
-            giants_catalogue_filepath=GIANTS_CATALOG_FILEPATH,
+            giants_catalog=giants_catalog,
             cutout_size=CUTOUT_SIZE,
             mosaics_to_crawl=MOSAICS_TO_CRAWL,
             component_catalogue=COMPONENT_CATALOGUE,

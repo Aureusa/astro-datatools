@@ -6,3 +6,6 @@ __pycache__/
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
+
+# egg-info files
+*.egg-info/
