@@ -156,7 +156,7 @@ class LoTSS_GRG_Sample(CocoSampleBase):
             proposal_filename = self._generate_proposal_filename()
             proposal_filepath = os.path.join(self.proposal_directory, proposal_filename)
             
-            np.savez_compressed(
+            np.savez(
                 proposal_filepath,
                 boxes=self.proposed_boxes,  # (N, 4) in [x1, y1, x2, y2] format
                 scores=self.proposal_scores  # (N,) objectness scores
@@ -355,7 +355,7 @@ class LoTSS_Search_Sample(CocoSampleBase):
             proposal_filename = self._generate_proposal_filename()
             proposal_filepath = os.path.join(self.proposal_directory, proposal_filename)
             
-            np.savez_compressed(
+            np.savez(
                 proposal_filepath,
                 boxes=self.proposed_boxes,  # (N, 4) in [x1, y1, x2, y2] format
                 scores=self.proposal_scores  # (N,) objectness scores

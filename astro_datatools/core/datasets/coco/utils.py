@@ -73,7 +73,12 @@ def bbox_to_xywh(bbox: dict) -> list:
     x1, y1, x2, y2 = bbox["left"], bbox["bottom"], bbox["right"], bbox["top"]
     return [x1, y1, x2 - x1, y2 - y1]
 
-def save_coco_image(image: np.ndarray, file_name: str, normalize_per_image: bool = True):
+def save_coco_image(
+        image: np.ndarray,
+        file_name: str,
+        normalize_per_image: bool = True,
+        png_compression: int = 1
+    ):
     """
     Save a COCO image (C, H, W) numpy array to a PNG file.
     Uses 16-bit PNG to preserve dynamic range for float data.
@@ -115,4 +120,8 @@ def save_coco_image(image: np.ndarray, file_name: str, normalize_per_image: bool
         # Already integer type
         image_bgr = cv2.cvtColor(image_hwc, cv2.COLOR_RGB2BGR)
     
-    cv2.imwrite(file_name, image_bgr)
+    cv2.imwrite(
+        file_name,
+        image_bgr,
+        [cv2.IMWRITE_PNG_COMPRESSION, int(np.clip(png_compression, 0, 9))]
+    )
