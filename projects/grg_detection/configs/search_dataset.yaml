@@ -7,7 +7,7 @@ PATHS:
   COMPONENT_CATALOGUE_FILEPATH: "/net/vdesk/data2/penchev/project_data/data/combined_cat/combined-components-v0.8.fits"
 
   # Where to save the generated dataset
-  SAVE_DIR: "/net/vdesk/data2/penchev/project_data/search-dataset/"
+  SAVE_DIR: "/net/vdesk/data2/penchev/project_data/big-search-dataset/"
 
 MOSAICS_TO_CRAWL:
   # Total cutouts in top 25 mosaics: 327

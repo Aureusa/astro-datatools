@@ -6,7 +6,7 @@ PATHS:
   COMPONENT_CATALOGUE_FILEPATH: "/net/vdesk/data2/penchev/project_data/data/combined_cat/combined-components-v0.8.fits"
 
   # Where to save the generated dataset
-  SAVE_DIR: "/net/vdesk/data2/penchev/project_data/test-negatives-dataset"
+  SAVE_DIR: "/net/vdesk/data2/penchev/project_data/big-dataset/"
 
 CUTOUT_PARAMS:
   CUTOUT_SIZE: 425 # pixels - this gives us 300 pixels after rotation of 45 degrees
@@ -27,7 +27,7 @@ AUGMENTATION:
   # The number of proposals is equal to 2^n - 1, where n is the number of islands.
   MAX_PRECOMPUTED_ISLANDS: 10
 
-  CLASS_RATIO: 1 # Ratio of negative to positive samples (e.g., 1 means equal number of negatives and positives)
+  CLASS_RATIO: 0 # Ratio of negative to positive samples (e.g., 1 means equal number of negatives and positives)
 
 ANNOTATIONS:
   # "rle" or "polygon" - rle is better for astro images.
@@ -36,6 +36,6 @@ ANNOTATIONS:
 
 PIPELINE:
   WORKERS: 10 # Number of parallel workers to use for dataset building
-  LIMIT_RADEC_LIST: 3000 # Limit the number of RA/DEC positions to process (for testing) - leave None to process all
-  LIMIT_CUTOUTS: 1000 # Limit the number of cutouts to process (for testing) - leave None to process all
+  LIMIT_RADEC_LIST: null # Limit the number of RA/DEC positions to process (for testing) - leave null to process all
+  LIMIT_CUTOUTS: null # Limit the number of cutouts to process (for testing) - leave null to process all
   

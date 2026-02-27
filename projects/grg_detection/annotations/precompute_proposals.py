@@ -81,15 +81,44 @@ class PrecomputeProposals:
         boxes = np.empty((num_combinations, 4), dtype=np.float32)
         scores = np.empty(num_combinations, dtype=np.float32)
 
+        # Precompute aggregate box/area for every non-empty subset mask using DP.
+        # This avoids repeated min/max/sum over arrays for each combination.
+        subset_xmin = np.empty(num_combinations + 1, dtype=np.float32)
+        subset_ymin = np.empty(num_combinations + 1, dtype=np.float32)
+        subset_xmax = np.empty(num_combinations + 1, dtype=np.float32)
+        subset_ymax = np.empty(num_combinations + 1, dtype=np.float32)
+        subset_area = np.empty(num_combinations + 1, dtype=np.float32)
+
+        for mask in range(1, num_combinations + 1):
+            lsb = mask & -mask
+            bit_idx = lsb.bit_length() - 1
+            prev_mask = mask ^ lsb
+
+            if prev_mask == 0:
+                subset_xmin[mask] = xmin[bit_idx]
+                subset_ymin[mask] = ymin[bit_idx]
+                subset_xmax[mask] = xmax[bit_idx]
+                subset_ymax[mask] = ymax[bit_idx]
+                subset_area[mask] = areas[bit_idx]
+            else:
+                subset_xmin[mask] = min(subset_xmin[prev_mask], xmin[bit_idx])
+                subset_ymin[mask] = min(subset_ymin[prev_mask], ymin[bit_idx])
+                subset_xmax[mask] = max(subset_xmax[prev_mask], xmax[bit_idx])
+                subset_ymax[mask] = max(subset_ymax[prev_mask], ymax[bit_idx])
+                subset_area[mask] = subset_area[prev_mask] + areas[bit_idx]
+
         idx = 0
         for r in range(1, n + 1):
             for combo in combinations(range(n), r):
-                c = np.array(combo, dtype=np.int32)
-                boxes[idx, 0] = xmin[c].min()
-                boxes[idx, 1] = ymin[c].min()
-                boxes[idx, 2] = xmax[c].max()
-                boxes[idx, 3] = ymax[c].max()
-                scores[idx] = areas[c].sum()
+                mask = 0
+                for bit_idx in combo:
+                    mask |= (1 << bit_idx)
+
+                boxes[idx, 0] = subset_xmin[mask]
+                boxes[idx, 1] = subset_ymin[mask]
+                boxes[idx, 2] = subset_xmax[mask]
+                boxes[idx, 3] = subset_ymax[mask]
+                scores[idx] = subset_area[mask]
                 idx += 1
 
         if return_scores and scores.max() > 0:

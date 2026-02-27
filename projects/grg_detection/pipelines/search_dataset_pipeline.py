@@ -8,6 +8,7 @@ import numpy as np
 from tqdm import tqdm
 import yaml
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from astro_datatools import setup_logging
 from astro_datatools.lotss_annotations import Segment
@@ -227,11 +228,11 @@ def main(config_path: str):
 
         # Remove the giants from "Hardcastle et al. 2023" since they are used for training
         # TODO: In the future this might need to be changed!
-        giants_catalog = giants_catalog[giants_catalog['FirstDisc'] != 'Hardcastle et al. 2023'].reset_index(drop=True)
-        logger.warning(
-            "[BE CAREFUL AND DO NOT IGNORE THIS MESSAGE!]: "
-            "Removed giants from 'Hardcastle et al. 2023' in the giants catalog since they are used for training. "
-        )
+        # giants_catalog = giants_catalog[giants_catalog['FirstDisc'] != 'Hardcastle et al. 2023'].reset_index(drop=True)
+        # logger.warning(
+        #     "[BE CAREFUL AND DO NOT IGNORE THIS MESSAGE!]: "
+        #     "Removed giants from 'Hardcastle et al. 2023' in the giants catalog since they are used for training. "
+        # )
         COMPONENT_NAMES = get_annotation_component_names(
             giants_catalog=giants_catalog,
             cutout_size=CUTOUT_SIZE,
@@ -246,12 +247,25 @@ def main(config_path: str):
 
     logger.info(f"Crawling the following mosaics: {MOSAICS_TO_CRAWL} with stride: {STRIDE} to generate cutouts for the search dataset.")
     
-    # Crawl the specified mosaics and generate cutouts
+    # Crawl the specified mosaics and generate cutouts in parallel
+    def _crawl_single_mosaic(field_name: str):
+        crawler = DR2Crawler(field_name, CUTOUT_SIZE, STRIDE, verbose=False)
+        return crawler.crawl()
+
+    max_crawl_workers = min(max(int(WORKERS), 1), len(MOSAICS_TO_CRAWL))
+    results_by_index = [None] * len(MOSAICS_TO_CRAWL)
+    with ThreadPoolExecutor(max_workers=max_crawl_workers) as executor:
+        future_to_index = {
+            executor.submit(_crawl_single_mosaic, mosaic): idx
+            for idx, mosaic in enumerate(MOSAICS_TO_CRAWL)
+        }
+        for future in tqdm(as_completed(future_to_index), total=len(future_to_index), desc="Crawling mosaics"):
+            idx = future_to_index[future]
+            results_by_index[idx] = future.result()
+
     cutouts = []
-    for mosaic in tqdm(MOSAICS_TO_CRAWL, desc="Crawling mosaics"):
-        crawler = DR2Crawler(mosaic, CUTOUT_SIZE, STRIDE, verbose=False)
-        results = crawler.crawl()
-        cutouts.extend(results)
+    for mosaic_cutouts in results_by_index:
+        cutouts.extend(mosaic_cutouts if mosaic_cutouts is not None else [])
 
     logger.info(f"Finished crawling mosaics. Total cutouts generated: {len(cutouts)}")
     logger.info("Building dataset with all cutouts...")

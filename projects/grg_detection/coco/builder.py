@@ -6,6 +6,8 @@ import gc
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+from astropy.coordinates import SkyCoord
+import astropy.units as u
 
 from astro_datatools.lotss_annotations import Segment
 from astro_datatools.core.datasets.coco.builder import CocoDatasetBuilderBase
@@ -17,7 +19,6 @@ from .evaluator import GTEvaluator
 
 from grg_detection.annotations import annotate_and_augment, augment_and_get_proposals, annotate, GRGFinder
 
-from strw_lofar_data_utils.core.cutout_maker.cutout_catalogue import CutoutCatalogue
 from strw_lofar_data_utils.core.cutout_maker.make_cutout import make_cutout
 from strw_lofar_data_utils.core.cutout_maker.source_blob import SourceBlob
 
@@ -42,7 +43,10 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
             segmentation_mode: str,
             class_ratio: float,
             workers: int,
-            save_dir: str
+            save_dir: str,
+            enable_cprofile: bool = True,
+            cprofile_sort_by: str = "cumtime",
+            cprofile_top_n: int = 50
         ):
         self.cutouts = cutouts
         self.component_catalogue = component_catalogue
@@ -65,6 +69,50 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
         self.stretch_type = stretch_type
         self.class_ratio = class_ratio
         self.workers = workers
+
+        if "RA" not in component_catalogue.columns or "DEC" not in component_catalogue.columns:
+            raise ValueError("component_catalogue must contain 'RA' and 'DEC' columns.")
+
+        source_name_col = None
+        for candidate in ["Parent_Source", "Source_Name", "Component_Name"]:
+            if candidate in component_catalogue.columns:
+                source_name_col = candidate
+                break
+        if source_name_col is None:
+            raise ValueError(
+                "component_catalogue must contain one of: 'Parent_Source', 'Source_Name', 'Component_Name'."
+            )
+
+        component_name_col = None
+        for candidate in ["Component_Name", "Parent_Source", "Source_Name"]:
+            if candidate in component_catalogue.columns:
+                component_name_col = candidate
+                break
+        if component_name_col is None:
+            raise ValueError(
+                "component_catalogue must contain one of: 'Component_Name', 'Parent_Source', 'Source_Name'."
+            )
+
+        catalog_ra = np.asarray(component_catalogue["RA"].to_numpy(), dtype=np.float64)
+        catalog_dec = np.asarray(component_catalogue["DEC"].to_numpy(), dtype=np.float64)
+        raw_source_names = component_catalogue[source_name_col].to_numpy()
+        raw_component_names = component_catalogue[component_name_col].to_numpy()
+
+        catalog_source_names = np.array([
+            name.decode("utf-8") if isinstance(name, bytes) else str(name)
+            for name in raw_source_names
+        ], dtype=object)
+        catalog_component_names = np.array([
+            name.decode("utf-8") if isinstance(name, bytes) else str(name)
+            for name in raw_component_names
+        ], dtype=object)
+
+        sort_indices = np.argsort(catalog_ra, kind="stable")
+        self._catalog_sort_idx = sort_indices
+        self._catalog_ra_sorted = catalog_ra[sort_indices]
+        self._catalog_dec_sorted = catalog_dec[sort_indices]
+        self._catalog_source_names_sorted = catalog_source_names[sort_indices]
+        self._catalog_component_names_sorted = catalog_component_names[sort_indices]
 
     def build(self) -> dict:
         """
@@ -253,90 +301,106 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
         ) -> None:
         mosaic = cutout.mosaic
         valid_data_radius_deg = mosaic.valid_data_radius_deg
-        valid_data_radius_deg_squared = valid_data_radius_deg ** 2
         mosaic_center_ra = mosaic.ra
         mosaic_center_dec = mosaic.dec
+
+        # Cutout validity checks require center + half-cutout-size to stay within
+        # mosaic valid radius. Sampling directly in this effective radius avoids
+        # repeated rejected candidates while preserving accepted-sample distribution.
+        pixel_scale_deg = abs(mosaic.header['CDELT1'])
+        cutout_half_size_deg = (self.crop_size * pixel_scale_deg) / 2
+        effective_radius_deg = max(valid_data_radius_deg - cutout_half_size_deg, 0.0)
+        if effective_radius_deg <= 0:
+            logger.warning(
+                f"Skipping negative sample generation for cutout {cutout_index}: "
+                "effective valid radius is non-positive."
+            )
+            return
+
+        asinh_stretch = False if self.stretch_type == "sqrt_stretch" else True
 
         # Generate cutouts with random RA/DEC pairs within the valid data radius
         registered_samples = 0
         while registered_samples < num_negative_examples:
-            # Generate random RA/DEC offsets within the valid data radius
-            ra_offset = np.random.uniform(-valid_data_radius_deg, valid_data_radius_deg)
-            dec_offset = np.random.uniform(-valid_data_radius_deg, valid_data_radius_deg)
-            
-            # Calculate new RA/DEC
-            new_ra = mosaic_center_ra + ra_offset
-            new_dec = mosaic_center_dec + dec_offset
-            
-            # Check if the new position is within the valid data radius
-            if ra_offset**2 + dec_offset**2 <= valid_data_radius_deg_squared:
-                cutout = make_cutout(
+            remaining = num_negative_examples - registered_samples
+            batch_size = max(64, remaining * 4)
+
+            theta = np.random.uniform(0.0, 2.0 * np.pi, size=batch_size)
+            radius = effective_radius_deg * np.sqrt(np.random.uniform(0.0, 1.0, size=batch_size))
+            ra_offsets = radius * np.cos(theta)
+            dec_offsets = radius * np.sin(theta)
+
+            for ra_offset, dec_offset in zip(ra_offsets, dec_offsets):
+                if registered_samples >= num_negative_examples:
+                    break
+
+                new_ra = mosaic_center_ra + ra_offset
+                new_dec = mosaic_center_dec + dec_offset
+
+                neg_cutout = make_cutout(
                     mosaic,
                     new_ra,
                     new_dec,
                     size_arcmin=None,
                     size_pixels=self.crop_size
                 )
-                if cutout is not None:
-                    # Get the data and the positions from the cutout
-                    data = cutout.get_data()
-                    positions = self._get_positions_negative_grg(
-                        cutout,
-                        nr_sigmas=self.nr_sigmas,
-                        rms=self.rms
-                    )
-                    
-                    if len(positions) == 0:
-                        continue
-                        
-                    # Annotate and augment the data
-                    (
-                        augmented_data,
-                        proposed_boxes,
-                        proposal_scores,
-                    ) = augment_and_get_proposals(
-                        data=data,
-                        positions=positions,
-                        max_precomputed_islands=self.max_precomputed_islands,
-                        nr_sigmas=self.nr_sigmas,
-                        rms=self.rms,
-                        asinh_stretch=False if self.stretch_type == "sqrt_stretch" else True
-                    )
+                if neg_cutout is None:
+                    continue
 
-                    # Skip if no valid proposed boxes
-                    if proposed_boxes is None or len(proposed_boxes) == 0:
-                        logger.debug(f"Skipping cutout {cutout_index} - no valid proposed boxes")
+                data = neg_cutout.get_data()
+                positions = self._get_positions_negative_grg(
+                    neg_cutout,
+                    nr_sigmas=self.nr_sigmas,
+                    rms=self.rms
+                )
+
+                if len(positions) == 0:
+                    continue
+
+                (
+                    augmented_data,
+                    proposed_boxes,
+                    proposal_scores,
+                ) = augment_and_get_proposals(
+                    data=data,
+                    positions=positions,
+                    max_precomputed_islands=self.max_precomputed_islands,
+                    nr_sigmas=self.nr_sigmas,
+                    rms=self.rms,
+                    asinh_stretch=asinh_stretch
+                )
+
+                if proposed_boxes is None or len(proposed_boxes) == 0:
+                    logger.debug(f"Skipping cutout {cutout_index} - no valid proposed boxes")
+                    continue
+
+                with coco_lock:
+                    sample_id = self.next_id
+                    self.next_id += 1
+
+                sample = LoTSS_Negative_GRG_Sample(
+                    id=sample_id,
+                    image_id=sample_id,
+                    category_id=1,
+                    ra=neg_cutout.ra,
+                    dec=neg_cutout.dec,
+                    rgb_image=augmented_data,
+                    proposed_boxes=proposed_boxes,
+                    proposal_scores=proposal_scores,
+                    positions=positions,
+                    stretch=self.stretch_type,
+                    iscrowd=0,
+                    directory=self.save_dir,
+                    save_image=True
+                )
+
+                with coco_lock:
+                    result = sample.register_sample()
+                    if result is None:
                         continue
-                    
-                    # Get next sequential ID (thread-safe)
-                    with coco_lock:
-                        sample_id = self.next_id
-                        self.next_id += 1
-                    
-                    sample = LoTSS_Negative_GRG_Sample(
-                        id=sample_id,
-                        image_id=sample_id,
-                        category_id=1,
-                        ra=cutout.ra,
-                        dec=cutout.dec,
-                        rgb_image=augmented_data,
-                        proposed_boxes=proposed_boxes,
-                        proposal_scores=proposal_scores,
-                        positions=positions,
-                        stretch=self.stretch_type,
-                        iscrowd=0,
-                        directory=self.save_dir,
-                        save_image=True
-                    )
-                    
-                    # Register sample with thread-safe lock
-                    with coco_lock:
-                        result = sample.register_sample()
-                        if result is None:
-                            continue
-                        coco["images"].append(result['image'])
-                    
-                    registered_samples += 1
+                    coco["images"].append(result['image'])
+
+                registered_samples += 1
 
     def _populate_samples(self, coco: dict) -> dict:
         # Pre-create directories to avoid repeated existence checks
@@ -401,6 +465,72 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
             )
         return segment_dict
 
+    def _normalize_obj_id(self, obj_id):
+        if isinstance(obj_id, bytes):
+            return obj_id.decode("utf-8")
+        return obj_id
+
+    def _get_cutout_candidates(self, curr_cutout):
+        max_sep_arcsec = curr_cutout.size_arcmin * 60 / 2
+        cos_dec = np.cos(np.deg2rad(curr_cutout.dec))
+        if abs(cos_dec) < 1e-8:
+            cos_dec = 1e-8
+
+        delta_ra = max_sep_arcsec / cos_dec / 3600
+        delta_dec = max_sep_arcsec / 3600
+
+        ra_min = curr_cutout.ra - delta_ra
+        ra_max = curr_cutout.ra + delta_ra
+        dec_min = curr_cutout.dec - delta_dec
+        dec_max = curr_cutout.dec + delta_dec
+
+        left_idx = np.searchsorted(self._catalog_ra_sorted, ra_min, side="left")
+        right_idx = np.searchsorted(self._catalog_ra_sorted, ra_max, side="right")
+
+        if left_idx >= right_idx:
+            return None
+
+        candidate_dec = self._catalog_dec_sorted[left_idx:right_idx]
+        dec_mask = (candidate_dec >= dec_min) & (candidate_dec <= dec_max)
+        if not np.any(dec_mask):
+            return None
+
+        candidate_ra = self._catalog_ra_sorted[left_idx:right_idx][dec_mask]
+        candidate_dec = candidate_dec[dec_mask]
+        candidate_source_names = self._catalog_source_names_sorted[left_idx:right_idx][dec_mask]
+        candidate_component_names = self._catalog_component_names_sorted[left_idx:right_idx][dec_mask]
+        candidate_orig_idx = self._catalog_sort_idx[left_idx:right_idx][dec_mask]
+
+        coords = SkyCoord(ra=candidate_ra * u.deg, dec=candidate_dec * u.deg, frame="icrs")
+        x_pixels, y_pixels = curr_cutout.get_wcs().world_to_pixel(coords)
+
+        x_pixels = np.rint(x_pixels).astype(np.int32)
+        y_pixels = np.rint(y_pixels).astype(np.int32)
+
+        valid_mask = (
+            (x_pixels >= 0)
+            & (x_pixels < curr_cutout.size_pixels)
+            & (y_pixels >= 0)
+            & (y_pixels < curr_cutout.size_pixels)
+        )
+        if not np.any(valid_mask):
+            return None
+
+        source_names = candidate_source_names[valid_mask]
+        component_names = candidate_component_names[valid_mask]
+        x_pixels = x_pixels[valid_mask]
+        y_pixels = y_pixels[valid_mask]
+        candidate_orig_idx = candidate_orig_idx[valid_mask]
+
+        # Preserve original catalogue row ordering for deterministic behavior.
+        order = np.argsort(candidate_orig_idx, kind="stable")
+        return {
+            "source_names": source_names[order],
+            "component_names": component_names[order],
+            "x_pixels": x_pixels[order],
+            "y_pixels": y_pixels[order],
+        }
+
     def _get_positions(
             self,
             curr_cutout,
@@ -408,15 +538,28 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
             nr_sigmas: int = 3,
             rms: float = 0.1*1e-3
         ) -> tuple[np.ndarray, dict[str, int]]:
-        # Create CutoutCatalogue for the current cutout
-        cutout_cat = CutoutCatalogue(
-            catalogue=self.component_catalogue,
-            cutout=curr_cutout,
-            source_col="Parent_Source"
-        )
-        # Creates a dict of SourceBlob instances for each unique object in the cutout
-        sb_dict = cutout_cat.get_source_blobs_from_catalogue()
-        segment_dict = self._convert_sb_dict_to_segment_dict(sb_dict, nr_sigmas=nr_sigmas, rms=rms)
+        candidates = self._get_cutout_candidates(curr_cutout)
+        if candidates is None:
+            return False, []
+
+        segment_positions = {}
+        for source_name, x_pos, y_pos in zip(
+            candidates["source_names"],
+            candidates["x_pixels"],
+            candidates["y_pixels"],
+        ):
+            key = self._normalize_obj_id(source_name)
+            if key not in segment_positions:
+                segment_positions[key] = []
+            segment_positions[key].append((int(x_pos), int(y_pos)))
+
+        if len(segment_positions) == 0:
+            return False, []
+
+        segment_dict = {
+            key: Segment(positions, nr_sigmas=nr_sigmas, rms=rms)
+            for key, positions in segment_positions.items()
+        }
         return GRGFinder(seg_dict=segment_dict, data=data).get_positions()
     
     def _get_positions_negative_grg(
@@ -425,22 +568,21 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
             nr_sigmas: int = 3,
             rms: float = 0.1*1e-3
         ) -> tuple[np.ndarray, dict[str, int]]:
-        # Create CutoutCatalogue for the current cutout
-        cutout_cat = CutoutCatalogue(
-            catalogue=self.component_catalogue,
-            cutout=curr_cutout,
-            source_col="Parent_Source"
-        )
-        # Creates a dict of SourceBlob instances for each unique object in the cutout
-        # unique_objects=False gets every component as a separate SourceBlob,
-        # which is what we want for search datasets
-        sb_dict = cutout_cat.get_source_blobs_from_catalogue(unique_objects=False)
-        segment_dict = self._convert_sb_dict_to_segment_dict(sb_dict, nr_sigmas=nr_sigmas, rms=rms)
+        candidates = self._get_cutout_candidates(curr_cutout)
+        if candidates is None:
+            return {}
 
-        positions = {}  # {key: list of (x, y) positions}
-        
-        for key, segment in segment_dict.items():
-            positions[key] = segment.positions[0] # Get just the tuple of (x, y) positions for this component
+        # Match previous behavior where each component key resolves to one representative
+        # position (first occurrence in original catalogue order).
+        positions = {}
+        for component_name, x_pos, y_pos in zip(
+            candidates["component_names"],
+            candidates["x_pixels"],
+            candidates["y_pixels"],
+        ):
+            key = self._normalize_obj_id(component_name)
+            if key not in positions:
+                positions[key] = (int(x_pos), int(y_pos))
         return positions
     
 
@@ -473,6 +615,29 @@ class GRGSearchDatasetBuilder(GRGDatasetBuilder):
             save_dir=save_dir
         )
         self.known_grg_component_names = known_grg_component_names
+        self.known_grg_component_names_set = set(known_grg_component_names)
+
+        if "RA" not in component_catalogue.columns or "DEC" not in component_catalogue.columns:
+            raise ValueError("component_catalogue must contain 'RA' and 'DEC' columns.")
+
+        component_name_col = "Component_Name" if "Component_Name" in component_catalogue.columns else "Parent_Source"
+        if component_name_col not in component_catalogue.columns:
+            raise ValueError(
+                "component_catalogue must contain either 'Component_Name' or 'Parent_Source' column."
+            )
+
+        catalog_ra = np.asarray(component_catalogue["RA"].to_numpy(), dtype=np.float64)
+        catalog_dec = np.asarray(component_catalogue["DEC"].to_numpy(), dtype=np.float64)
+        raw_component_names = component_catalogue[component_name_col].to_numpy()
+        catalog_component_names = np.array([
+            name.decode("utf-8") if isinstance(name, bytes) else str(name)
+            for name in raw_component_names
+        ], dtype=object)
+
+        sort_indices = np.argsort(catalog_ra)
+        self._catalog_ra_sorted = catalog_ra[sort_indices]
+        self._catalog_dec_sorted = catalog_dec[sort_indices]
+        self._catalog_component_names_sorted = catalog_component_names[sort_indices]
 
     def build(self) -> dict:
         """
@@ -502,10 +667,10 @@ class GRGSearchDatasetBuilder(GRGDatasetBuilder):
             coco["annotations"].append(result['annotation'])
         return coco
 
-    def _process_single_cutout_thread(self, cutout, cutout_index, coco, coco_lock):
+    def _process_single_cutout_thread(self, cutout, cutout_index):
         """
-        Process a single cutout in a thread and register samples immediately.
-        For search datasets, we don't have annotations.
+        Process a single cutout in a thread and return registration output.
+        For search datasets, we don't have augmentation rotations.
         """
         try:
             # Get the data and the positions from the cutout
@@ -549,12 +714,9 @@ class GRGSearchDatasetBuilder(GRGDatasetBuilder):
             # Skip if no valid proposed boxes
             if proposed_boxes is None or len(proposed_boxes) == 0:
                 logger.debug(f"Skipping cutout {cutout_index} - no valid proposed boxes")
-                return
-            
-            # Get next sequential ID (thread-safe)
-            with coco_lock:
-                sample_id = self.next_id
-                self.next_id += 1
+                return None
+
+            sample_id = cutout_index + 1
             
             sample = LoTSS_Search_Sample(
                 id=sample_id,
@@ -575,18 +737,7 @@ class GRGSearchDatasetBuilder(GRGDatasetBuilder):
                 directory=self.save_dir,
                 save_image=True
             )
-            
-            # Register sample with thread-safe lock
-            with coco_lock:
-                coco = self._register_sample(sample, coco)
-
-            # Free memory
-            del data
-            del positions
-            del augmented_data
-            del proposed_boxes
-            del proposal_scores
-            gc.collect()
+            return sample.register_sample()
             
         except Exception as e:
             print(f"\n!!! ERROR in cutout {cutout_index} !!!")
@@ -597,6 +748,35 @@ class GRGSearchDatasetBuilder(GRGDatasetBuilder):
             print(f"Error message: {e}")
             print("!!!!!!!!!!!!!!!!!!!!!!!!\n")
             logger.error(f"Error in thread processing cutout {cutout_index}: {e}", exc_info=True)
+            return None
+
+    def _populate_samples(self, coco: dict) -> dict:
+        images_dir = os.path.join(self.save_dir, "images")
+        proposals_dir = os.path.join(self.save_dir, "proposals")
+        os.makedirs(images_dir, exist_ok=True)
+        os.makedirs(proposals_dir, exist_ok=True)
+
+        with ThreadPoolExecutor(max_workers=self.workers) as executor:
+            future_to_index = {
+                executor.submit(self._process_single_cutout_thread, cutout, cutout_index): cutout_index
+                for cutout_index, cutout in enumerate(self.cutouts)
+            }
+
+            with tqdm(total=len(self.cutouts), desc="Generating LoTSS Samples for COCO Dataset") as pbar:
+                for future in as_completed(future_to_index):
+                    cutout_index = future_to_index[future]
+                    try:
+                        result = future.result()
+                        if result is not None:
+                            coco["images"].append(result["image"])
+                            if result["annotation"] is not None:
+                                coco["annotations"].append(result["annotation"])
+                    except Exception as e:
+                        logger.error(f"Error processing cutout {cutout_index}: {e}", exc_info=True)
+                    finally:
+                        pbar.update(1)
+
+        return coco
 
     def _get_positions(
             self,
@@ -604,29 +784,62 @@ class GRGSearchDatasetBuilder(GRGDatasetBuilder):
             nr_sigmas: int = 3,
             rms: float = 0.1*1e-3
         ) -> tuple[np.ndarray, dict[str, int]]:
-        # Create CutoutCatalogue for the current cutout
-        cutout_cat = CutoutCatalogue(
-            catalogue=self.component_catalogue,
-            cutout=curr_cutout,
-            source_col="Parent_Source"
-        )
-        # Creates a dict of AstroObject instances for each unique object in the cutout
-        # unique_objects=False gets every component as a separate AstroObject,
-        # which is what we want for search datasets
-        sb_dict = cutout_cat.get_source_blobs_from_catalogue(unique_objects=False)
-        segment_dict = self._convert_sb_dict_to_segment_dict(sb_dict, nr_sigmas=nr_sigmas, rms=rms)
+        max_sep_arcsec = curr_cutout.size_arcmin * 60 / 2
+        delta_ra = max_sep_arcsec / max(np.cos(np.deg2rad(curr_cutout.dec)), 1e-8) / 3600
+        delta_dec = max_sep_arcsec / 3600
 
-        positions = {}  # {key: list of (x, y) positions}
-        
+        ra_min = curr_cutout.ra - delta_ra
+        ra_max = curr_cutout.ra + delta_ra
+        dec_min = curr_cutout.dec - delta_dec
+        dec_max = curr_cutout.dec + delta_dec
+
+        left_idx = np.searchsorted(self._catalog_ra_sorted, ra_min, side="left")
+        right_idx = np.searchsorted(self._catalog_ra_sorted, ra_max, side="right")
+
+        if left_idx >= right_idx:
+            return {}, [], {}
+
+        candidate_dec = self._catalog_dec_sorted[left_idx:right_idx]
+        dec_mask = (candidate_dec >= dec_min) & (candidate_dec <= dec_max)
+        if not np.any(dec_mask):
+            return {}, [], {}
+
+        candidate_ra = self._catalog_ra_sorted[left_idx:right_idx][dec_mask]
+        candidate_dec = candidate_dec[dec_mask]
+        candidate_names = self._catalog_component_names_sorted[left_idx:right_idx][dec_mask]
+
+        coords = SkyCoord(ra=candidate_ra * u.deg, dec=candidate_dec * u.deg, frame="icrs")
+        x_pixels, y_pixels = curr_cutout.get_wcs().world_to_pixel(coords)
+
+        x_pixels = np.rint(x_pixels).astype(np.int32)
+        y_pixels = np.rint(y_pixels).astype(np.int32)
+
+        valid_mask = (
+            (x_pixels >= 0)
+            & (x_pixels < curr_cutout.size_pixels)
+            & (y_pixels >= 0)
+            & (y_pixels < curr_cutout.size_pixels)
+        )
+
+        if not np.any(valid_mask):
+            return {}, [], {}
+
+        valid_names = candidate_names[valid_mask]
+        valid_x = x_pixels[valid_mask]
+        valid_y = y_pixels[valid_mask]
+
+        positions = {}
         grg_positions = []
-        grg_positions_dict = {}  # {key: list of (x, y) positions} for known GRG components only
-        for key, segment in segment_dict.items():
-            positions[key] = segment.positions[0] # Get just the tuple of (x, y) positions for this component
+        grg_positions_dict = {}
+        for key, x_pos, y_pos in zip(valid_names, valid_x, valid_y):
+            point = (int(x_pos), int(y_pos))
+            positions[key] = point
             if self._known_grg_component(key):
-                grg_positions.append(segment.positions[0])
-                grg_positions_dict[key] = segment.positions[0]
+                grg_positions.append(point)
+                grg_positions_dict[key] = point
+
         return positions, grg_positions, grg_positions_dict
 
     def _known_grg_component(self, component_name: str) -> bool:
-        return component_name in self.known_grg_component_names
+        return component_name in self.known_grg_component_names_set
     

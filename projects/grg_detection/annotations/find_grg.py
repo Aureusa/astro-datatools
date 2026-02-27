@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.ndimage import label as ndi_label
 
 from astro_datatools.lotss_annotations.segmentation import Segment
 
@@ -72,18 +73,54 @@ class GRGFinder:
         segment_sizes = {}  # {key: size in pixels}
         bounding_boxes = {}  # {key: {top, bottom, left, right}}
         positions = {}  # {key: list of (x, y) positions}
+
+        cc_cache = {}  # {(nr_sigmas, rms): connected components map}
+
+        def _segment_from_positions(segment: Segment) -> np.ndarray:
+            cache_key = (segment.nr_sigmas, segment.rms)
+            if cache_key not in cc_cache:
+                threshold = segment.nr_sigmas * segment.rms
+                mask = self.data >= threshold
+                cc_map, _ = ndi_label(mask)
+                cc_cache[cache_key] = cc_map
+            cc_map = cc_cache[cache_key]
+
+            if not segment.positions:
+                return np.zeros_like(self.data, dtype=np.int8)
+
+            pos_arr = np.asarray(segment.positions, dtype=np.int32)
+            valid = (
+                (pos_arr[:, 0] >= 0)
+                & (pos_arr[:, 0] < self.data.shape[1])
+                & (pos_arr[:, 1] >= 0)
+                & (pos_arr[:, 1] < self.data.shape[0])
+            )
+            if not np.any(valid):
+                return np.zeros_like(self.data, dtype=np.int8)
+
+            valid_pos = pos_arr[valid]
+            marker_components = cc_map[valid_pos[:, 1], valid_pos[:, 0]]
+            marker_components = marker_components[marker_components > 0]
+            if marker_components.size == 0:
+                return np.zeros_like(self.data, dtype=np.int8)
+
+            keep_components = np.unique(marker_components)
+            max_label = int(cc_map.max())
+            keep_lut = np.zeros(max_label + 1, dtype=bool)
+            keep_lut[keep_components] = True
+            seg = keep_lut[cc_map]
+            return seg.astype(np.int8, copy=False)
         
         # First pass: get all segments and their sizes
-        label = 1
         for key, segment in self.seg_dict.items():
-            seg = segment.get_segmentation(self.data)
+            seg = _segment_from_positions(segment)
             segment_masks[key] = seg
             segment_sizes[key] = np.sum(seg > 0)  # Count non-zero pixels
             positions[key] = segment.positions
-            label += 1
         
         # Second pass: build final segmentation map, resolving overlapping pixels
         seg_map = np.zeros_like(self.data, dtype=int)
+        claimed = np.zeros_like(self.data, dtype=bool)
         
         # Assign pixels, prioritizing larger segments for overlapping regions
         # Segments are already sorted by size (largest first)
@@ -96,9 +133,9 @@ class GRGFinder:
             seg_pixels = seg > 0
             
             # Only assign pixels that haven't been claimed yet
-            unclaimed = seg_map == 0
-            assigned_pixels = seg_pixels & unclaimed
-            seg_map[assigned_pixels] = label
+            assigned_pixels = seg_pixels & (~claimed)
+            claimed[assigned_pixels] = True
+            seg_map[assigned_pixels] = 1
 
             # Generate bounding box from assigned pixels (more efficient than argwhere)
             if not assigned_pixels.any():

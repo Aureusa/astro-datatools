@@ -1,9 +1,59 @@
 import numpy as np
 import logging
+from scipy.ndimage import label as ndi_label
 
 from astro_datatools.lotss_annotations.segmentation import Segment
 from astro_datatools.augment import RotateAugment, LotssToRGBAugment
 from .precompute_proposals import PrecomputeProposals as proposals_generator
+
+
+def _segmentation_from_positions_via_connected_components(
+        data: np.ndarray,
+        positions: list[tuple[int, int]],
+        nr_sigmas: int,
+        rms: float,
+    ) -> np.ndarray:
+    """
+    Fast equivalent for Segment(...).get_segmentation(data) when all markers share
+    the same label (which is the case in Segment.get_segmentation).
+
+    It keeps connected components of the threshold mask that contain at least one
+    valid marker position.
+    """
+    if not positions:
+        return np.zeros_like(data, dtype=data.dtype)
+
+    threshold = nr_sigmas * rms
+    mask = data >= threshold
+    if not mask.any():
+        return np.zeros_like(data, dtype=data.dtype)
+
+    cc_map, _ = ndi_label(mask)
+    if cc_map.max() == 0:
+        return np.zeros_like(data, dtype=data.dtype)
+
+    positions_array = np.asarray(positions, dtype=np.int32)
+    valid = (
+        (positions_array[:, 0] >= 0)
+        & (positions_array[:, 0] < data.shape[1])
+        & (positions_array[:, 1] >= 0)
+        & (positions_array[:, 1] < data.shape[0])
+    )
+    if not np.any(valid):
+        return np.zeros_like(data, dtype=data.dtype)
+
+    valid_positions = positions_array[valid]
+    marker_components = cc_map[valid_positions[:, 1], valid_positions[:, 0]]
+    marker_components = marker_components[marker_components > 0]
+    if marker_components.size == 0:
+        return np.zeros_like(data, dtype=data.dtype)
+
+    keep_components = np.unique(marker_components)
+    max_label = int(cc_map.max())
+    keep_lut = np.zeros(max_label + 1, dtype=bool)
+    keep_lut[keep_components] = True
+    seg = keep_lut[cc_map]
+    return seg.astype(data.dtype, copy=False)
 
 
 def rotate_xy_list_of_points(
@@ -177,23 +227,23 @@ def annotate_and_augment(
         grg_positions, angles, crop_dims, original_w, original_h
     )
     
-    # Generate segmentation maps for each angle based on the rotated positions for GRG
+    # Generate segmentation maps for each angle for GRG and all components.
     augmented_grg_segm = np.zeros_like(rotated_data, dtype=rotated_data.dtype)
-    for i in range(rotated_data.shape[0]):
-        augmented_grg_segm[i] = Segment(
-            positions=rotated_grg_positions[i],
-            nr_sigmas=nr_sigmas,
-            rms=rms
-        ).get_segmentation(rotated_data[i])
-
-    # Now for the components segmentation maps
     augmented_seg_map = np.zeros_like(rotated_data, dtype=rotated_data.dtype)
     for i in range(rotated_data.shape[0]):
-        augmented_seg_map[i] = Segment(
+        curr_data = rotated_data[i]
+        augmented_grg_segm[i] = _segmentation_from_positions_via_connected_components(
+            data=curr_data,
+            positions=rotated_grg_positions[i],
+            nr_sigmas=nr_sigmas,
+            rms=rms,
+        )
+        augmented_seg_map[i] = _segmentation_from_positions_via_connected_components(
+            data=curr_data,
             positions=rotated_all_component_positions[i],
             nr_sigmas=nr_sigmas,
-            rms=rms
-        ).get_segmentation(rotated_data[i])
+            rms=rms,
+        )
 
     # Generate bboxes for all angles that cover the grg_segmentation areas 
     # Get the bounding boxes for each angle by finding x1, y1, x2, y2 (x_min, y_min, x_max, y_max)
@@ -249,12 +299,13 @@ def augment_and_get_proposals(
     for key in positions:
         all_component_positions.extend([positions[key]])
 
-    # Create a Segment instance for the components and get the segmentation map
-    seg_map = Segment(
+    # Faster equivalent to Segment(...).get_segmentation(data) for single-label markers
+    seg_map = _segmentation_from_positions_via_connected_components(
+        data=data,
         positions=all_component_positions,
         nr_sigmas=nr_sigmas,
-        rms=rms
-    ).get_segmentation(data)
+        rms=rms,
+    )
 
     
     # Generate region proposals for the Masked RCNN model
