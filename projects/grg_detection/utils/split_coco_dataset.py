@@ -154,14 +154,11 @@ def split_coco_dataset_by_components(
     # Create COCO datasets for each split and copy files
     output_stats = {}
     
-    for split_name, image_ids in tqdm(
-        split_image_ids.items(),
-        desc="Creating split datasets"
-    ):
+    for split_name, image_ids in split_image_ids.items():
         # Expand image_ids to include all rotated versions of the origin images
         expanded_image_ids = set(image_ids)
         
-        for origin_id in image_ids:
+        for origin_id in tqdm(image_ids, desc=f"Expanding {split_name} images"):
             # Find all images that have this origin_id in their metadata
             for img in coco_data['images']:
                 if 'metadata' in img and 'origin_id' in img['metadata']:
@@ -190,7 +187,7 @@ def split_coco_dataset_by_components(
         # Get all annotations for these images (including rotated versions)
         image_ids_set = set(expanded_image_ids)
         
-        for img_id in expanded_image_ids:
+        for img_id in tqdm(expanded_image_ids, desc=f"Processing {split_name} images"):
             img_data = image_id_to_data[img_id]
             split_coco['images'].append(img_data)
             
@@ -211,7 +208,7 @@ def split_coco_dataset_by_components(
                 shutil.copy2(src_proposal, dst_proposal)
         
         # Get annotations for these images
-        for ann in coco_data['annotations']:
+        for ann in tqdm(coco_data['annotations'], desc=f"Processing {split_name} annotations"):
             if ann['image_id'] in image_ids_set:
                 split_coco['annotations'].append(ann)
         
