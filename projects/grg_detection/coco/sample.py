@@ -213,6 +213,7 @@ class LoTSS_GRG_Sample(CocoSampleBase):
             "origin_id": self.origin_id,
             "rotation_angle": self.rotation_angle,
             "stretch": self.stretch,
+            "grg_in_sample": True,
             "reprojected": self.reprojected,
             "old_redshift": self.old_redshift,
             "new_redshift": self.new_redshift
@@ -380,13 +381,17 @@ class LoTSS_Search_Sample(CocoSampleBase):
         metadata = {
             "RA": self.ra,
             "DEC": self.dec,
-            "positions": self.positions,
+            "all_component_positions": self.positions,
             "stretch": self.stretch,
         }
         if self.grg_segmentation is not None and self.grg_bboxes is not None:
             metadata["grg_in_sample"] = True
+        else:
+            metadata["grg_in_sample"] = False
         if self.grg_positions is not None and len(self.grg_positions) > 0:
             metadata["grg_positions"] = self.grg_positions
+        else:
+            metadata["grg_positions"] = []
         coco_image.add_metadata(metadata)
         return coco_image
 
@@ -442,8 +447,9 @@ class LoTSS_Negative_GRG_Sample(LoTSS_Search_Sample):
         metadata = {
             "RA": self.ra,
             "DEC": self.dec,
-            "positions": self.positions,
-            "negative_sample": True,
+            "all_component_positions": self.positions,
+            "grg_in_sample": False, # Explicitly indicate that this is a negative sample with no GRG
+            "grg_positions": [], # No GRG positions for negative samples
             "stretch": self.stretch,
         }
         coco_image.add_metadata(metadata)
