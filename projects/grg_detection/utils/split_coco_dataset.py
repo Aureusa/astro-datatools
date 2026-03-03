@@ -63,13 +63,29 @@ def split_coco_dataset_by_components(
     # Group images by component count
     component_count_groups = defaultdict(list)
     image_id_to_data = {}
+    annotations_by_image = defaultdict(list)
+    annotation_presence = defaultdict(lambda: {'bbox': False, 'segmentation': False})
+    origin_to_augmented_ids = defaultdict(list)
 
     # Get all negative examples
     negative_image_ids = set()
     
-    # First pass: build image_id_to_data for ALL images
+    # First pass: build image_id_to_data and origin->augmented index for ALL images
     for img in coco_data['images']:
         image_id_to_data[img['id']] = img
+        metadata = img.get('metadata', {})
+        origin_id = metadata.get('origin_id')
+        if origin_id is not None:
+            origin_to_augmented_ids[origin_id].append(img['id'])
+
+    # Build annotation indexes once
+    for ann in coco_data['annotations']:
+        image_id = ann['image_id']
+        annotations_by_image[image_id].append(ann)
+        if 'bbox' in ann:
+            annotation_presence[image_id]['bbox'] = True
+        if 'segmentation' in ann:
+            annotation_presence[image_id]['segmentation'] = True
     
     # Second pass: filter and group by component count (only non-rotated origin images)
     for img in tqdm(
@@ -77,8 +93,9 @@ def split_coco_dataset_by_components(
         desc="Processing images"
     ):
         # Check if both bbox and segm annotations exist for this image
-        has_bbox = any(ann['image_id'] == img['id'] and 'bbox' in ann for ann in coco_data['annotations'])
-        has_segm = any(ann['image_id'] == img['id'] and 'segmentation' in ann for ann in coco_data['annotations'])
+        ann_presence = annotation_presence.get(img['id'], {'bbox': False, 'segmentation': False})
+        has_bbox = ann_presence['bbox']
+        has_segm = ann_presence['segmentation']
 
         if 'metadata' in img and 'negative_sample' in img['metadata']:
             if img['metadata']['negative_sample']:
@@ -95,11 +112,14 @@ def split_coco_dataset_by_components(
                 continue
 
         # Extract component count from metadata
-        if 'metadata' in img and 'grg_positions' in img['metadata']:
-            component_count = len(img['metadata'].get('grg_positions', []))
-            if component_count == 0:
-                logger.warning(f"Image ID {img['id']} has zero GRG positions in metadata.")
-                continue
+        if 'metadata' not in img or 'grg_positions' not in img['metadata']:
+            logger.warning(f"Image ID {img['id']} is missing grg_positions in metadata.")
+            continue
+
+        component_count = len(img['metadata'].get('grg_positions', []))
+        if component_count == 0:
+            logger.warning(f"Image ID {img['id']} has zero GRG positions in metadata.")
+            continue
         
         component_count_groups[component_count].append(img['id'])
     
@@ -159,11 +179,8 @@ def split_coco_dataset_by_components(
         expanded_image_ids = set(image_ids)
         
         for origin_id in tqdm(image_ids, desc=f"Expanding {split_name} images"):
-            # Find all images that have this origin_id in their metadata
-            for img in coco_data['images']:
-                if 'metadata' in img and 'origin_id' in img['metadata']:
-                    if img['metadata']['origin_id'] == origin_id:
-                        expanded_image_ids.add(img['id'])
+            # Add all augmented images that belong to this origin image
+            expanded_image_ids.update(origin_to_augmented_ids.get(origin_id, []))
         
         expanded_image_ids = list(expanded_image_ids)
         logger.info(f"Creating {split_name} dataset with {len(image_ids)} origin images "
@@ -208,9 +225,8 @@ def split_coco_dataset_by_components(
                 shutil.copy2(src_proposal, dst_proposal)
         
         # Get annotations for these images
-        for ann in tqdm(coco_data['annotations'], desc=f"Processing {split_name} annotations"):
-            if ann['image_id'] in image_ids_set:
-                split_coco['annotations'].append(ann)
+        for img_id in tqdm(image_ids_set, desc=f"Processing {split_name} annotations"):
+            split_coco['annotations'].extend(annotations_by_image.get(img_id, []))
         
         # Save split annotations
         split_json_path = split_dir / "annotations.json"
