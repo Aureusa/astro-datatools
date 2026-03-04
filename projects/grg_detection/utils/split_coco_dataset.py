@@ -97,8 +97,9 @@ def split_coco_dataset_by_components(
         has_bbox = ann_presence['bbox']
         has_segm = ann_presence['segmentation']
 
-        if 'metadata' in img and 'negative_sample' in img['metadata']:
-            if img['metadata']['negative_sample']:
+        # First check if this is a negative sample (no annotations) and handle separately
+        if 'metadata' in img and 'grg_in_sample' in img['metadata']:
+            if not img['metadata']['grg_in_sample']:
                 negative_image_ids.add(img['id'])
                 continue
 
@@ -139,7 +140,7 @@ def split_coco_dataset_by_components(
         negatives_stats[f'negatives_total'] = n_negatives
     split_info = " | ".join([f"{name}: {negatives_stats[f'negatives_{name}']} negatives" for name in split_names])
     logger.info(f"Total negative samples {negatives_stats['negatives_total']} -> {split_info}")
-    
+
     component_stats = {}
 
     logger.info("Stratified splitting by component count:")
