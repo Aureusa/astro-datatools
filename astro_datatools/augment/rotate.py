@@ -2,10 +2,9 @@ import numpy as np
 from scipy.ndimage import rotate
 import logging
 
+from astro_datatools.logger import setup_logging
+
 from .base import BaseAugment
-
-
-logger = logging.getLogger(__name__)
 
 
 class RotateAugment(BaseAugment):
@@ -34,6 +33,7 @@ class RotateAugment(BaseAugment):
         :param specific_crop_size: Specific size (width, height) to crop to after rotation.
         :type specific_crop_size: tuple[int, int]
         """
+        self.logger = setup_logging(name=f"astro_datatools.augment.{self.__class__.__name__}")
         self.angles = angles
         self.height_and_width_axes = height_and_width_axes
 
@@ -42,7 +42,7 @@ class RotateAugment(BaseAugment):
         self.specific_crop_size = specific_crop_size
 
         if self.dynamic_cropping and self.specific_crop_size is not None:
-            logger.error("Cannot set both dynamic_cropping and specific_crop_size.")
+            self.logger.error("Cannot set both dynamic_cropping and specific_crop_size.")
             raise ValueError("Cannot set both dynamic_cropping and specific_crop_size.")
         
         self.verbose = verbose
@@ -51,7 +51,7 @@ class RotateAugment(BaseAugment):
             info = f"RotateAugment initialized with angles: {self.angles}"
             info += f"\nDynamic cropping: {self.dynamic_cropping}" if self.dynamic_cropping else ""
             info += f"\nSpecific crop size: {self.specific_crop_size}" if self.specific_crop_size is not None else ""
-            logger.info(info)
+            self.logger.info(info)
 
     def augment(self, data: np.ndarray) -> np.ndarray:
         """
@@ -67,8 +67,8 @@ class RotateAugment(BaseAugment):
         w = data.shape[self.height_and_width_axes[1]]
 
         if self.verbose:
-            logger.info(f"Original data shape: {data.shape}")
-            logger.info(f"Height (h): {h}, Width (w): {w}")
+            self.logger.info(f"Original data shape: {data.shape}")
+            self.logger.info(f"Height (h): {h}, Width (w): {w}")
 
         # Rotate all angles - this is already reasonably efficient
         augmented_data = [
@@ -91,7 +91,7 @@ class RotateAugment(BaseAugment):
         augmented_data = self._crop_center(augmented_data, new_w, new_h)
 
         if self.verbose:
-            logger.info(f"Augmented data shape after rotation and cropping: {augmented_data.shape}")
+            self.logger.info(f"Augmented data shape after rotation and cropping: {augmented_data.shape}")
         return augmented_data
 
     def largest_rotated_rect(self, w: int, h: int, angle: float) -> tuple[int, int]:

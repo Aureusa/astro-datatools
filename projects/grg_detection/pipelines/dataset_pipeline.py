@@ -7,16 +7,13 @@ import logging
 import yaml
 import argparse
 
-from astro_datatools import setup_logging
+from astro_datatools.logger import setup_logging
 
 from grg_detection.coco import GRGDatasetBuilder
 
 from strw_lofar_data_utils.pipelines import generate_cutouts
 
 import os
-
-# Setup logger
-logger = logging.getLogger("dataset_pipeline")
 
 
 def load_config(config_path: str) -> dict:
@@ -73,6 +70,7 @@ def main(config_path: str):
     # Setup logging
     log_filepath = os.path.join(DATASET_SAVE_DIR, "dataset_pipeline.log")
     setup_logging(log_file=log_filepath)
+    logger = setup_logging(name="grg_detection.pipelines.dataset_pipeline", log_file=log_filepath)
     
     # Redirect stdout and stderr to also write to the log file
     # This captures tqdm progress bars

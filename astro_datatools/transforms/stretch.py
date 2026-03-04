@@ -4,10 +4,10 @@ These functions are motivated by common practices in computer vision and astrono
 They do not perform any normalization; they only stretch the data.
 """
 import numpy as np
-import logging
+from astro_datatools.logger import setup_logging
 
 
-logger = logging.getLogger(__name__)
+logger = setup_logging(name="astro_datatools.transforms.stretch")
 
 
 def sqrt_stretch(data: np.ndarray, min_val: float = 0, max_val: float = None) -> np.ndarray:

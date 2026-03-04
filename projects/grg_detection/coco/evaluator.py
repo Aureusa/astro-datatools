@@ -1,6 +1,8 @@
 import numpy as np
 import copy
 
+from astro_datatools.logger import setup_logging
+
 from .probe import COCOProbe
 
 
@@ -22,6 +24,7 @@ class GTEvaluator(COCOProbe):
     """
     def __init__(self, annotations: dict, annotations_path: str):
         super().__init__(annotations, annotations_path)
+        self.logger = setup_logging(name=f"grg_detection.coco.{self.__class__.__name__}")
     
     def evaluate(self):
         tp_mask, fp_mask, fn_mask, tp_bbox, fp_bbox, fn_bbox = self._gather_predictions()
@@ -43,14 +46,34 @@ class GTEvaluator(COCOProbe):
             "bbox_recall": bbox_recall,
             "bbox_f1": self._f1(bbox_precision, bbox_recall)
         }
-        
-        # Log the results in a nice table format
-        print("===========================================================")
-        print("Evaluation results against ground truth:")
-        for key, value in results.items():
-            print(f"{key}: {value:.4f}")
-        print("===========================================================")
+
+        # Log the results in a nice markdown table format
+        self.logger.info("\n" + self._create_results_table(results))
         return copy.deepcopy(results)
+
+    def _create_results_table(self, results: dict):
+        """
+        Create a markdown-formatted results table with:
+        - top row: metric names (results keys)
+        - bottom row: metric values as percentages (numeric values * 100)
+        """
+        if not results:
+            return "| Metric | Value |\n|:------:|:-----:|\n| - | - |"
+
+        headers = list(results.keys())
+        values = [results[key] for key in headers]
+
+        header_row = "| " + " | ".join(headers) + " |"
+        align_row = "|" + "|".join(":" + "-" * (max(len(str(h)), 5)) + ":" for h in headers) + "|"
+
+        def _format_value(value):
+            if isinstance(value, (int, float, np.floating)):
+                return f"{float(value) * 100:.3f}%"
+            return str(value)
+
+        value_row = "| " + " | ".join(_format_value(value) for value in values) + " |"
+        return "\n".join([header_row, align_row, value_row])
+
 
     def _gather_predictions(self):
         tp_mask_list = []

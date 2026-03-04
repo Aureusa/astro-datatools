@@ -4,11 +4,11 @@ import numpy as np
 import json
 import logging
 
+from astro_datatools.logger import setup_logging
+
 from .sample import CocoSampleBase
 from .category import CocoCategoryBase
 
-
-logger = logging.getLogger(__name__)
 
 def _find_non_serializable(obj, path="root", out=None, max_items=50):
     if out is None:
@@ -46,6 +46,12 @@ def _find_non_serializable(obj, path="root", out=None, max_items=50):
 
 
 class CocoDatasetBuilderBase(ABC):
+    def __post_init__(self):
+        # Ensure that logger is set up for the class
+        # Check if there is a self.logger attribute, if not, set it up
+        if not hasattr(self, 'logger'):
+            self.logger = setup_logging(name=f"astro_datatools.{self.__class__.__name__}")
+
     def build(self) -> dict:
         """
         Build the COCO dataset by generating samples, categories, and saving to a JSON file.
@@ -71,7 +77,7 @@ class CocoDatasetBuilderBase(ABC):
         # Generate samples and register them into the COCO dataset
         coco = self._populate_samples(coco)
 
-        logger.info(f"COCO dataset built with {len(coco['images'])} images, "
+        self.logger.info(f"COCO dataset built with {len(coco['images'])} images, "
                     f"{len(coco['annotations'])} annotations, "
                     f"and {len(coco['categories'])} categories.")
 
@@ -81,9 +87,9 @@ class CocoDatasetBuilderBase(ABC):
                 json.dump(coco, f, indent=4)
         except TypeError as e:
             bad = _find_non_serializable(coco)
-            print("\n[DEBUG] Non-serializable objects found in COCO dataset:")
+            self.logger.error("\n[DEBUG] Non-serializable objects found in COCO dataset:")
             for line in bad:
-                print(f"  - {line}")
+                self.logger.error(f"  - {line}")
             raise TypeError(f"Failed to serialize COCO dataset to JSON: {e}")
 
         return coco

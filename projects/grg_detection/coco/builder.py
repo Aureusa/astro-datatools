@@ -9,6 +9,7 @@ import threading
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
+from astro_datatools.logger import setup_logging
 from astro_datatools.lotss_annotations import Segment
 from astro_datatools.core.datasets.coco.builder import CocoDatasetBuilderBase
 
@@ -21,9 +22,6 @@ from grg_detection.annotations import annotate_and_augment, augment_and_get_prop
 
 from strw_lofar_data_utils.core.cutout_maker.make_cutout import make_cutout
 from strw_lofar_data_utils.core.cutout_maker.source_blob import SourceBlob
-
-
-logger = logging.getLogger("GRGDatasetBuilder")
 
 
 GRG_CATEGORY = LoTSS_GRG_CocoCategory(id=1, name="GRG")
@@ -44,14 +42,13 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
             class_ratio: float,
             workers: int,
             save_dir: str,
-            enable_cprofile: bool = True,
-            cprofile_sort_by: str = "cumtime",
-            cprofile_top_n: int = 50
         ):
+        self.logger = setup_logging(name=f"grg_detection.coco.{self.__class__.__name__}")
         self.cutouts = cutouts
         self.component_catalogue = component_catalogue
 
         if stretch_type not in ["sqrt_stretch", "asinh_stretch"]:
+            self.logger.error(f"Invalid stretch type: {stretch_type}. Must be 'sqrt_stretch' or 'asinh_stretch'.")
             raise ValueError(f"Invalid stretch type: {stretch_type}. Must be 'sqrt_stretch' or 'asinh_stretch'.")
 
         self.segmentation_mode = segmentation_mode
@@ -79,6 +76,9 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
                 source_name_col = candidate
                 break
         if source_name_col is None:
+            self.logger.error(
+                "component_catalogue must contain one of: 'Parent_Source', 'Source_Name', 'Component_Name'."
+            )
             raise ValueError(
                 "component_catalogue must contain one of: 'Parent_Source', 'Source_Name', 'Component_Name'."
             )
@@ -89,6 +89,9 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
                 component_name_col = candidate
                 break
         if component_name_col is None:
+            self.logger.error(
+                "component_catalogue must contain one of: 'Component_Name', 'Parent_Source', 'Source_Name'."
+            )
             raise ValueError(
                 "component_catalogue must contain one of: 'Component_Name', 'Parent_Source', 'Source_Name'."
             )
@@ -124,7 +127,7 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
         coco = super().build()
 
         # Clean the dataset using COCODatasetCleaner
-        logger.info("Cleaning the COCO dataset...")
+        self.logger.info("Cleaning the COCO dataset...")
         filepath_for_coco = self._get_filepath()
         cleaner = COCODatasetCleaner(
             coco, filepath_for_coco, filepath_for_coco
@@ -132,19 +135,13 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
         coco, _, updated_images_ids, removed_images_ids = cleaner.clean(
             save_cleaned_dataset=True
         )
-        logger.info(f"Removed {len(removed_images_ids)} images without annotations.")
-        logger.info(f"Updated {len(updated_images_ids)} images with new annotations.")
+        self.logger.info(f"Removed {len(removed_images_ids)} images without annotations.")
+        self.logger.info(f"Updated {len(updated_images_ids)} images with new annotations.")
 
         # Evaluate against ground truth, should get perfect scores after cleaning
-        logger.info("Evaluating the COCO dataset against ground truth...")
+        self.logger.info("Evaluating the COCO dataset against ground truth...")
         gt_evaluator = GTEvaluator(coco, filepath_for_coco)
         results = gt_evaluator.evaluate()
-        if isinstance(results, dict):
-            info = "Results of evaluation against ground truth:\n"
-            for key, value in results.items():
-                info += f"{key}: {value}\n"
-            logger.info(info)
-
         return coco
 
     def _get_filepath(self) -> str:
@@ -178,7 +175,7 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
                 )
             
         except Exception as e:
-            logger.error(f"Error in thread processing cutout {cutout_index}: {e}", exc_info=True)
+            self.logger.error(f"Error in thread processing cutout {cutout_index}: {e}", exc_info=True)
 
     def _generate_positive_samples(self, cutout, cutout_index, coco, coco_lock) -> int:
         data = None
@@ -203,7 +200,7 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
             )
             
             if grg_positions is False:
-                logger.warning(f"Skipping cutout at RA: {cutout.ra}, DEC: {cutout.dec} - no GRG annotation found.")
+                self.logger.warning(f"Skipping cutout at RA: {cutout.ra}, DEC: {cutout.dec} - no GRG annotation found.")
                 return 0
                 
             # Annotate and augment the data
@@ -234,7 +231,7 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
             for angle_index, angle in enumerate(self.rotation_angles):
                 # Skip this rotation if bbox is None (no valid segmentation)
                 if rotated_grg_bboxes[angle_index] is None:
-                    logger.debug(f"Skipping rotation {angle}° for cutout {cutout_index} - no valid bbox")
+                    self.logger.debug(f"Skipping rotation {angle}° for cutout {cutout_index} - no valid bbox")
                     continue
                 
                 # Get next sequential ID (thread-safe)
@@ -311,7 +308,7 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
         cutout_half_size_deg = (self.crop_size * pixel_scale_deg) / 2
         effective_radius_deg = max(valid_data_radius_deg - cutout_half_size_deg, 0.0)
         if effective_radius_deg <= 0:
-            logger.warning(
+            self.logger.warning(
                 f"Skipping negative sample generation for cutout {cutout_index}: "
                 "effective valid radius is non-positive."
             )
@@ -371,7 +368,7 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
                 )
 
                 if proposed_boxes is None or len(proposed_boxes) == 0:
-                    logger.debug(f"Skipping cutout {cutout_index} - no valid proposed boxes")
+                    self.logger.debug(f"Skipping cutout {cutout_index} - no valid proposed boxes")
                     continue
 
                 with coco_lock:
@@ -433,7 +430,7 @@ class GRGDatasetBuilder(CocoDatasetBuilderBase):
                     try:
                         future.result()  # Samples already registered inside thread
                     except Exception as e:
-                        logger.error(f"Error processing cutout {cutout_index}: {e}", exc_info=True)
+                        self.logger.error(f"Error processing cutout {cutout_index}: {e}", exc_info=True)
                     finally:
                         pbar.update(1)
                         
@@ -614,6 +611,7 @@ class GRGSearchDatasetBuilder(GRGDatasetBuilder):
             workers=workers,
             save_dir=save_dir
         )
+        self.logger = setup_logging(name=f"grg_detection.coco.{self.__class__.__name__}")
         self.known_grg_component_names = known_grg_component_names
         self.known_grg_component_names_set = set(known_grg_component_names)
 
@@ -682,7 +680,7 @@ class GRGSearchDatasetBuilder(GRGDatasetBuilder):
             )
             
             if len(positions) == 0:
-                logger.warning(f"Skipping cutout at RA: {cutout.ra}, DEC: {cutout.dec} - no radio components found.")
+                self.logger.warning(f"Skipping cutout at RA: {cutout.ra}, DEC: {cutout.dec} - no radio components found.")
                 return
                 
             # Augment and get proposals
@@ -713,7 +711,7 @@ class GRGSearchDatasetBuilder(GRGDatasetBuilder):
 
             # Skip if no valid proposed boxes
             if proposed_boxes is None or len(proposed_boxes) == 0:
-                logger.debug(f"Skipping cutout {cutout_index} - no valid proposed boxes")
+                self.logger.debug(f"Skipping cutout {cutout_index} - no valid proposed boxes")
                 return None
 
             sample_id = cutout_index + 1
@@ -747,7 +745,7 @@ class GRGSearchDatasetBuilder(GRGDatasetBuilder):
             print(f"Error type: {type(e).__name__}")
             print(f"Error message: {e}")
             print("!!!!!!!!!!!!!!!!!!!!!!!!\n")
-            logger.error(f"Error in thread processing cutout {cutout_index}: {e}", exc_info=True)
+            self.logger.error(f"Error in thread processing cutout {cutout_index}: {e}", exc_info=True)
             return None
 
     def _populate_samples(self, coco: dict) -> dict:
@@ -772,7 +770,7 @@ class GRGSearchDatasetBuilder(GRGDatasetBuilder):
                             if result["annotation"] is not None:
                                 coco["annotations"].append(result["annotation"])
                     except Exception as e:
-                        logger.error(f"Error processing cutout {cutout_index}: {e}", exc_info=True)
+                        self.logger.error(f"Error processing cutout {cutout_index}: {e}", exc_info=True)
                     finally:
                         pbar.update(1)
 

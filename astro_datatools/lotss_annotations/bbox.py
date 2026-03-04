@@ -2,6 +2,7 @@ import numpy as np
 
 from .segmentation import Segment, SegmentationMap
 
+
 class BBox:
     """
     Generate bounding boxes from segmentation maps.

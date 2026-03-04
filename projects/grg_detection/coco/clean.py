@@ -2,12 +2,15 @@ import numpy as np
 import json
 from copy import deepcopy
 
+from astro_datatools.logger import setup_logging
+
 from .probe import COCOProbe
 
 
 class COCODatasetCleaner(COCOProbe):
     def __init__(self, annotations: dict, annotations_path: str, cleaned_annotations_path: str):
         super().__init__(annotations, annotations_path)
+        self.logger = setup_logging(name=f"grg_detection.coco.{self.__class__.__name__}")
 
         self.annotations_path = annotations_path
         self.cleaned_annotations_path = cleaned_annotations_path
@@ -84,7 +87,7 @@ class COCODatasetCleaner(COCOProbe):
             elif mask[int(y), int(x)] == 1:
                 grg_components.append(comp)
             else:
-                print("WTF")
+                self.logger.error("Unexpected mask value encountered.")
 
         cleaned_grg_components = []
         for comp in grg_components:
@@ -94,7 +97,7 @@ class COCODatasetCleaner(COCOProbe):
             elif mask[int(y), int(x)] == 1:
                 cleaned_grg_components.append(comp)
             else:
-                print("WTF")
+                self.logger.error("Unexpected mask value encountered.")
         return cleaned_grg_components, cleaned_non_grg_components
     
     def _save_cleaned_dataset(self, cleaned_annotations: dict):
@@ -105,4 +108,4 @@ class COCODatasetCleaner(COCOProbe):
         with open(self.cleaned_annotations_path, 'w') as f:
             json.dump(cleaned_annotations, f)
 
-        print(f"Cleaned dataset saved to {self.cleaned_annotations_path}")
+        self.logger.info(f"Cleaned dataset saved to {self.cleaned_annotations_path}")

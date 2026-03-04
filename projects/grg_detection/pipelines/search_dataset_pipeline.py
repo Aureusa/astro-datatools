@@ -10,19 +10,19 @@ import yaml
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from astro_datatools import setup_logging
+from astro_datatools.logger import setup_logging
 from astro_datatools.lotss_annotations import Segment
 
 from grg_detection.coco import GRGSearchDatasetBuilder
 from grg_detection.annotations import GRGFinder
 
 from strw_lofar_data_utils.core.cutout_maker import SourceBlob, CutoutCatalogue
-from strw_lofar_data_utils.core.mosaic_crawler import DR2Crawler
+from strw_lofar_data_utils.core.mosaic_crawler import Crawler
 from strw_lofar_data_utils.pipelines import generate_cutouts
 
 
 # Setup logger
-logger = logging.getLogger("search_dataset_pipeline")
+logger = setup_logging(name="grg_detection.pipelines.search_dataset_pipeline")
 
 
 def load_config(config_path: str) -> dict:
@@ -249,7 +249,7 @@ def main(config_path: str):
     
     # Crawl the specified mosaics and generate cutouts in parallel
     def _crawl_single_mosaic(field_name: str):
-        crawler = DR2Crawler(field_name, CUTOUT_SIZE, STRIDE, verbose=False)
+        crawler = Crawler(field_name, CUTOUT_SIZE, STRIDE, verbose=False)
         return crawler.crawl()
 
     max_crawl_workers = min(max(int(WORKERS), 1), len(MOSAICS_TO_CRAWL))

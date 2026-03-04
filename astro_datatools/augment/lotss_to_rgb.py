@@ -14,6 +14,7 @@ import numpy as np
 from .base import BaseAugment
 from ..transforms.stretch import sqrt_stretch, asinh_stretch
 
+
 class LotssToRGBAugment(BaseAugment):
     """Class for converting LoTSS data to RGB format."""
 
