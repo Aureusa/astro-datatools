@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "astro-datatools"
-version = "0.1.5"
+version = "0.1.5.dev0"
 description = "Astronomy-focused data processing toolkit for FITS workflows and dataset generation."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -29,4 +29,4 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = [".", "projects"]
-include = ["astro_datatools*", "grg_detection*"]
+include = ["astro_datatools*", "grg_detection*", "b2s*"]
