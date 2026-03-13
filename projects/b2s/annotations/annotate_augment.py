@@ -146,7 +146,10 @@ def _segmentation_from_positions_via_connected_components(
     valid_positions = positions_array[valid]
     valid_indices_to_keep = np.asarray(indeces_to_keep, dtype=np.int32)[valid]
     marker_components = cc_map[valid_positions[:, 1], valid_positions[:, 0]]
-    marker_components = marker_components[marker_components > 0]
+    marker_valid = marker_components > 0
+    valid_positions = valid_positions[marker_valid]
+    valid_indices_to_keep = valid_indices_to_keep[marker_valid]
+    marker_components = marker_components[marker_valid]
     if marker_components.size == 0:
         return np.zeros_like(data, dtype=data.dtype), empty_positions, empty_indices
 
@@ -376,12 +379,25 @@ def annotate_and_augment(
     # Generate region proposals for the Masked RCNN model for each angle
     augmented_proposals = []
     augmented_proposal_scores = []
+    gt_component_membership = []
+    gt_proposal_validity = []
     for i in range(num_angles):
-        proposed_boxes, proposal_scores = proposals_generator(
+        angle_indices = np.asarray(original_indices_to_keep_after_segmentation_list[i], dtype=np.int32)
+        angle_source_labels = np.asarray(source_components_arr[0])[angle_indices]
+
+        proposed_boxes, proposal_scores, angle_gt_component_membership, angle_gt_proposal_validity = proposals_generator(
             augmented_seg_map[i], max_islands=max_precomputed_islands
-        ).precompute(return_scores=True)
+        ).precompute(
+            return_scores=True,
+            return_ground_truth=True,
+            component_positions=np.asarray(valid_positions_list[i], dtype=np.int32),
+            component_source_labels=angle_source_labels,
+            target_num_components=max_precomputed_islands,
+        )
         augmented_proposals.append(proposed_boxes)
         augmented_proposal_scores.append(proposal_scores)
+        gt_component_membership.append(angle_gt_component_membership)
+        gt_proposal_validity.append(angle_gt_proposal_validity)
 
     physics_features = PhysicsAwareFeatures(
         augmented_proposals=augmented_proposals,
@@ -392,12 +408,6 @@ def annotate_and_augment(
     )
 
     features, within_proposal_mask = physics_features.derive_features() # (P, C, F) or per-angle lists
-
-    # Generate ground truth component membership for each proposal
-    gt_component_membership, gt_proposal_validity = physics_features.derive_ground_truth(
-        source_components_arr=source_components_arr,
-        within_proposal_mask=within_proposal_mask,
-    ) # arrays for homogeneous case, per-angle lists for inhomogeneous case
 
     grouping_metadata = _build_grouping_metadata(
         candidates_keys=candidates_keys,

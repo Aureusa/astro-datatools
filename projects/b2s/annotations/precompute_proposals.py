@@ -60,13 +60,72 @@ class PrecomputeProposals:
         return islands[:self.max_islands]
 
 
-    def precompute(self, return_scores: bool = True):
+    def precompute(
+        self,
+        return_scores: bool = True,
+        return_ground_truth: bool = False,
+        component_positions: np.ndarray = None,
+        component_source_labels: np.ndarray = None,
+        target_num_components: int = None,
+    ):
         islands = self._per_island_properties()
     
         if not islands:
             boxes = np.zeros((0, 4), dtype=np.float32)
             scores = np.zeros(0, dtype=np.float32)
+            if return_ground_truth:
+                if target_num_components is None:
+                    target_num_components = 0 if component_positions is None else int(np.asarray(component_positions).shape[0])
+                gt_component_membership = np.zeros((0, int(target_num_components)), dtype=np.int32)
+                gt_proposal_validity = np.zeros((0,), dtype=np.int32)
+                return (boxes, scores, gt_component_membership, gt_proposal_validity) if return_scores else (boxes, gt_component_membership, gt_proposal_validity)
             return (boxes, scores) if return_scores else boxes
+
+        if return_ground_truth:
+            if component_positions is None or component_source_labels is None:
+                raise ValueError(
+                    "component_positions and component_source_labels are required when return_ground_truth=True."
+                )
+
+            component_positions = np.asarray(component_positions, dtype=np.int32)
+            component_source_labels = np.asarray(component_source_labels)
+            if component_positions.ndim != 2 or component_positions.shape[1] != 2:
+                raise ValueError(
+                    f"component_positions must have shape (num_components, 2), got {component_positions.shape}."
+                )
+            if component_source_labels.shape[0] != component_positions.shape[0]:
+                raise ValueError(
+                    "component_source_labels length must match component_positions length. "
+                    f"Got {component_source_labels.shape[0]} and {component_positions.shape[0]}."
+                )
+
+            num_components = int(component_positions.shape[0])
+            if target_num_components is None:
+                target_num_components = num_components
+            target_num_components = int(target_num_components)
+            if target_num_components < num_components:
+                raise ValueError(
+                    f"target_num_components ({target_num_components}) must be >= num_components ({num_components})."
+                )
+
+            # Map connected-component labels to island indices in the selected (top-area) island list.
+            island_ids = np.array([island["id"] for island in islands], dtype=np.int32)
+            island_id_to_idx = {int(island_id): idx for idx, island_id in enumerate(island_ids)}
+
+            island_component_bits = [0] * len(islands)
+            for comp_idx, (x_pos, y_pos) in enumerate(component_positions):
+                if y_pos < 0 or x_pos < 0 or y_pos >= self.cc_map.shape[0] or x_pos >= self.cc_map.shape[1]:
+                    continue
+                cc_label = int(self.cc_map[y_pos, x_pos])
+                if cc_label in island_id_to_idx:
+                    island_component_bits[island_id_to_idx[cc_label]] |= (1 << comp_idx)
+
+            # Encode sources to integer IDs and precompute full source-component bitmasks.
+            _, source_ids = np.unique(component_source_labels, return_inverse=True)
+            source_component_bits = {}
+            for comp_idx, source_id in enumerate(source_ids):
+                source_id = int(source_id)
+                source_component_bits[source_id] = source_component_bits.get(source_id, 0) | (1 << comp_idx)
 
         n = len(islands)
 
@@ -80,6 +139,11 @@ class PrecomputeProposals:
         num_combinations = 2**n - 1
         boxes = np.empty((num_combinations, 4), dtype=np.float32)
         scores = np.empty(num_combinations, dtype=np.float32)
+
+        if return_ground_truth:
+            subset_component_bits = [0] * (num_combinations + 1)
+            gt_component_membership = np.zeros((num_combinations, target_num_components), dtype=np.int32)
+            gt_proposal_validity = np.zeros((num_combinations,), dtype=np.int32)
 
         # Precompute aggregate box/area for every non-empty subset mask using DP.
         # This avoids repeated min/max/sum over arrays for each combination.
@@ -107,6 +171,9 @@ class PrecomputeProposals:
                 subset_ymax[mask] = max(subset_ymax[prev_mask], ymax[bit_idx])
                 subset_area[mask] = subset_area[prev_mask] + areas[bit_idx]
 
+            if return_ground_truth:
+                subset_component_bits[mask] = subset_component_bits[prev_mask] | island_component_bits[bit_idx]
+
         idx = 0
         for r in range(1, n + 1):
             for combo in combinations(range(n), r):
@@ -119,9 +186,29 @@ class PrecomputeProposals:
                 boxes[idx, 2] = subset_xmax[mask]
                 boxes[idx, 3] = subset_ymax[mask]
                 scores[idx] = subset_area[mask]
+
+                if return_ground_truth:
+                    used_bits = subset_component_bits[mask]
+                    if used_bits != 0:
+                        first_comp_idx = (used_bits & -used_bits).bit_length() - 1
+                        first_source_id = int(source_ids[first_comp_idx])
+                        source_full_bits = source_component_bits[first_source_id]
+                        # Valid iff proposal-generating components are exactly all components of one source.
+                        if used_bits == source_full_bits:
+                            gt_proposal_validity[idx] = 1
+                            for comp_idx in range(num_components):
+                                if (used_bits >> comp_idx) & 1:
+                                    gt_component_membership[idx, comp_idx] = 1
                 idx += 1
 
         if return_scores and scores.max() > 0:
             scores /= scores.max()
+
+        if return_ground_truth:
+            return (
+                (boxes, scores, gt_component_membership, gt_proposal_validity)
+                if return_scores
+                else (boxes, gt_component_membership, gt_proposal_validity)
+            )
 
         return (boxes, scores) if return_scores else boxes
