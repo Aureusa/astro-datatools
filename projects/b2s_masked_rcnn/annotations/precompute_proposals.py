@@ -87,6 +87,7 @@ class PrecomputeProposals:
                     gt_instance_bboxes = np.zeros((0, 4), dtype=np.float32)
                     gt_instance_masks = []
                     gt_instance_category_ids = np.zeros((0,), dtype=np.int32)
+                    gt_instance_positions = []
                     if return_scores:
                         return (
                             boxes,
@@ -94,12 +95,14 @@ class PrecomputeProposals:
                             gt_instance_bboxes,
                             gt_instance_masks,
                             gt_instance_category_ids,
+                            gt_instance_positions,
                         )
                     return (
                         boxes,
                         gt_instance_bboxes,
                         gt_instance_masks,
                         gt_instance_category_ids,
+                        gt_instance_positions,
                     )
             return (boxes, scores) if return_scores else boxes
 
@@ -161,6 +164,7 @@ class PrecomputeProposals:
                 gt_instance_bboxes = []
                 gt_instance_masks = []
                 gt_instance_category_ids = []
+                gt_instance_positions = []
 
         # Precompute aggregate box/area for every non-empty subset mask using DP.
         # This avoids repeated min/max/sum over arrays for each combination.
@@ -239,6 +243,13 @@ class PrecomputeProposals:
                                     instance_mask = np.zeros_like(self.cc_map, dtype=bool)
                                 gt_instance_masks.append(instance_mask.astype(np.uint8))
                                 gt_instance_category_ids.append(int(class_label))
+
+                                selected_component_indices = [
+                                    comp_idx for comp_idx in range(num_components)
+                                    if ((used_bits >> comp_idx) & 1) == 1
+                                ]
+                                instance_positions = component_positions[selected_component_indices]
+                                gt_instance_positions.append(instance_positions.astype(np.int32, copy=True))
                 idx += 1
 
         if return_scores and scores.max() > 0:
@@ -255,12 +266,14 @@ class PrecomputeProposals:
                         gt_instance_bboxes,
                         gt_instance_masks,
                         gt_instance_category_ids,
+                        gt_instance_positions,
                     )
                 return (
                     boxes,
                     gt_instance_bboxes,
                     gt_instance_masks,
                     gt_instance_category_ids,
+                    gt_instance_positions,
                 )
 
         return (boxes, scores) if return_scores else boxes

@@ -294,6 +294,7 @@ def annotate_and_augment(
         gt_instance_bboxes,
         gt_instance_masks,
         gt_instance_category_ids,
+        gt_instance_positions,
         augmented_proposals,
         proposal_scores,
         grouping_metadata
@@ -364,6 +365,7 @@ def annotate_and_augment(
     gt_instance_bboxes = []
     gt_instance_masks = []
     gt_instance_category_ids = []
+    gt_instance_positions = []
     for i in range(num_angles):
         angle_indices = np.asarray(original_indices_to_keep_after_segmentation_list[i], dtype=np.int32)
         angle_source_labels = np.asarray(source_components_arr[0])[angle_indices]
@@ -374,6 +376,7 @@ def annotate_and_augment(
             angle_gt_instance_bboxes,
             angle_gt_instance_masks,
             angle_gt_instance_category_ids,
+            angle_gt_instance_positions,
         ) = proposals_generator(
             augmented_seg_map[i], max_islands=max_precomputed_islands
         ).precompute(
@@ -388,6 +391,7 @@ def annotate_and_augment(
         gt_instance_bboxes.append(angle_gt_instance_bboxes)
         gt_instance_masks.append(angle_gt_instance_masks)
         gt_instance_category_ids.append(angle_gt_instance_category_ids)
+        gt_instance_positions.append(angle_gt_instance_positions)
 
     grouping_metadata = _build_grouping_metadata(
         candidates_keys=candidates_keys,
@@ -408,6 +412,7 @@ def annotate_and_augment(
         gt_instance_bboxes,
         gt_instance_masks,
         gt_instance_category_ids,
+        gt_instance_positions,
         augmented_proposals,
         proposal_scores,
         grouping_metadata,

@@ -202,6 +202,7 @@ class B2SDatasetBuilder(CocoDatasetBuilderBase):
                 gt_instance_bboxes,
                 gt_instance_masks,
                 gt_instance_category_ids,
+                gt_instance_positions,
                 rotated_proposed_boxes,
                 rotated_proposal_scores,
                 grouping_metadata,
@@ -246,6 +247,11 @@ class B2SDatasetBuilder(CocoDatasetBuilderBase):
                     if isinstance(gt_instance_category_ids, list)
                     else gt_instance_category_ids
                 )
+                curr_gt_instance_positions = (
+                    gt_instance_positions[angle_index]
+                    if isinstance(gt_instance_positions, list)
+                    else gt_instance_positions
+                )
                 curr_proposal_scores = (
                     rotated_proposal_scores[angle_index]
                     if isinstance(rotated_proposal_scores, list)
@@ -275,6 +281,7 @@ class B2SDatasetBuilder(CocoDatasetBuilderBase):
                     instance_bboxes=curr_gt_instance_bboxes,
                     instance_masks=curr_gt_instance_masks,
                     instance_category_ids=curr_gt_instance_category_ids,
+                    instance_positions=curr_gt_instance_positions,
                     candidates=candidates_for_angle,
                     rotated=True if angle != 0 else False,
                     origin_id=origin_id,

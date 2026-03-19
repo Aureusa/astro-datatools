@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 import numpy as np
 
@@ -16,10 +16,16 @@ class LoTSS_B2S_CocoAnnotation(CocoAnnotationBase):
     bbox: list
     area: float
     segmentation: dict
+    instance_positions: list[list[int]] = field(default_factory=list)
     iscrowd: int = 0
 
     def __post_init__(self):
         super().__post_init__()
+
+    def to_dict(self) -> dict:
+        ann = super().to_dict()
+        ann["instance_positions"] = self.instance_positions
+        return ann
 
 
 @dataclass
@@ -46,6 +52,7 @@ class LoTSS_B2S_MaskRCNN_Sample(CocoSampleBase):
             instance_bboxes,
             instance_masks,
             instance_category_ids,
+            instance_positions,
             candidates: dict[str, list[tuple[int, int]]],
             rotated: bool = False,
             origin_id: int = None,
@@ -81,6 +88,7 @@ class LoTSS_B2S_MaskRCNN_Sample(CocoSampleBase):
         self.instance_bboxes = np.asarray(instance_bboxes, dtype=np.float32)
         self.instance_masks = list(instance_masks)
         self.instance_category_ids = np.asarray(instance_category_ids, dtype=np.int32)
+        self.instance_positions = instance_positions
 
         self.save_image = save_image
         self.image_directory = os.path.join(directory, "images")
@@ -128,10 +136,11 @@ class LoTSS_B2S_MaskRCNN_Sample(CocoSampleBase):
         if self.instance_bboxes.shape[0] == 0:
             return annotations
 
-        for bbox, mask, category_id in zip(
+        for bbox, mask, category_id, instance_positions in zip(
             self.instance_bboxes,
             self.instance_masks,
             self.instance_category_ids,
+            self.instance_positions,
         ):
             mask_array = np.asarray(mask, dtype=np.uint8)
             area = mask_area(mask_array)
@@ -140,6 +149,9 @@ class LoTSS_B2S_MaskRCNN_Sample(CocoSampleBase):
 
             segmentation = mask_to_rle(mask_array)
             bbox_xyxy = [float(v) for v in np.asarray(bbox, dtype=np.float32).tolist()]
+            instance_positions_xy = [
+                [int(x), int(y)] for x, y in instance_positions
+           ]
 
             annotations.append(
                 LoTSS_B2S_CocoAnnotation(
@@ -149,6 +161,7 @@ class LoTSS_B2S_MaskRCNN_Sample(CocoSampleBase):
                     bbox=bbox_xyxy,
                     area=area,
                     segmentation=segmentation,
+                    instance_positions=instance_positions_xy,
                     iscrowd=self.iscrowd,
                 )
             )
