@@ -58,13 +58,9 @@ def setup_logging(
     :return: Configured logger instance
     """
     console_handler = logging.StreamHandler()
-    stream = getattr(console_handler, "stream", None)
-    supports_color = bool(
-        use_colors
-        and stream is not None
-        and hasattr(stream, "isatty")
-        and stream.isatty()
-    )
+    # Respect explicit user preference for colorized console output.
+    # File handlers remain uncolored.
+    supports_color = bool(use_colors)
 
     console_handler.setFormatter(
         ColorFormatter(datefmt=datefmt, use_color=supports_color)

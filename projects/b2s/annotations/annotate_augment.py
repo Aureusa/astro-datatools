@@ -1,8 +1,6 @@
 import numpy as np
-import logging
 from scipy.ndimage import label as ndi_label
 
-from astro_datatools.lotss_annotations.segmentation import Segment
 from astro_datatools.augment import RotateAugment, LotssToRGBAugment
 from .precompute_proposals import PrecomputeProposals as proposals_generator
 from .physics_features import PhysicsAwareFeatures
@@ -293,15 +291,15 @@ def annotate_and_augment(
     :type asinh_stretch: bool
     :return: Tuple containing (
         augmented_data,
-        rotated_grg_positions,
-        rotated_all_component_positions,
-        augmented_grg_segm,
-        augmented_bboxes,
+        valid_positions_list,
+        gt_component_membership,
+        gt_proposal_validity,
         augmented_proposals,
-        augmented_proposal_scores
+        grouping_metadata,
+        features,
+        within_proposal_mask
     )
-    :rtype: tuple[np.ndarray, list[list[tuple[int, int]]], list[list[tuple[int, int]]], 
-            np.ndarray, list[list[int]], list[np.ndarray], list[np.ndarray]]
+    :rtype: tuple
     """
     # First: Augment the data by rotating it for each angle
     original_w, original_h = data.shape[height_and_width_axes[1]], data.shape[height_and_width_axes[0]]
@@ -378,24 +376,22 @@ def annotate_and_augment(
     
     # Generate region proposals for the Masked RCNN model for each angle
     augmented_proposals = []
-    augmented_proposal_scores = []
     gt_component_membership = []
     gt_proposal_validity = []
     for i in range(num_angles):
         angle_indices = np.asarray(original_indices_to_keep_after_segmentation_list[i], dtype=np.int32)
         angle_source_labels = np.asarray(source_components_arr[0])[angle_indices]
 
-        proposed_boxes, proposal_scores, angle_gt_component_membership, angle_gt_proposal_validity = proposals_generator(
+        proposed_boxes, angle_gt_component_membership, angle_gt_proposal_validity = proposals_generator(
             augmented_seg_map[i], max_islands=max_precomputed_islands
         ).precompute(
-            return_scores=True,
+            return_scores=False,
             return_ground_truth=True,
             component_positions=np.asarray(valid_positions_list[i], dtype=np.int32),
             component_source_labels=angle_source_labels,
             target_num_components=max_precomputed_islands,
         )
         augmented_proposals.append(proposed_boxes)
-        augmented_proposal_scores.append(proposal_scores)
         gt_component_membership.append(angle_gt_component_membership)
         gt_proposal_validity.append(angle_gt_proposal_validity)
 
@@ -428,73 +424,7 @@ def annotate_and_augment(
         gt_component_membership,
         gt_proposal_validity,
         augmented_proposals,
-        augmented_proposal_scores,
         grouping_metadata,
         features,
         within_proposal_mask
     )
-
-def augment_and_get_proposals(
-        data: np.ndarray,
-        positions: dict[str, list], # {key: list of (x, y) positions}
-        max_precomputed_islands: int = 10,
-        nr_sigmas: int = 3,
-        rms: float = 0.1*1e-3,
-        asinh_stretch: bool = False
-    ) -> np.ndarray:
-    # Get a list of all component positions from the positions dict
-    all_component_positions = []
-    for key in positions:
-        all_component_positions.extend([positions[key]])
-
-    # Faster equivalent to Segment(...).get_segmentation(data) for single-label markers
-    seg_map = _segmentation_from_positions_via_connected_components(
-        data=data,
-        positions=all_component_positions,
-        nr_sigmas=nr_sigmas,
-        rms=rms,
-    )
-
-    
-    # Generate region proposals for the Masked RCNN model
-    proposed_boxes, proposal_scores = proposals_generator(
-        seg_map, max_islands=max_precomputed_islands
-    ).precompute(return_scores=True)
-
-    # Finally we convert the data into RGB image
-    lotss_to_rgba = LotssToRGBAugment(rms_noise=rms, asinh_stretch=asinh_stretch)
-    augmented_data = lotss_to_rgba.augment(data)
-    return (
-        augmented_data,
-        proposed_boxes,
-        proposal_scores,
-    )
-
-def annotate(
-        grg_positions: list[tuple[int, int]],
-        data: np.ndarray,
-        nr_sigmas: int = 3,
-        rms: float = 0.1*1e-3
-    ) -> np.ndarray:
-    # Generate segmentation maps for each angle based on the rotated positions for GRG
-    grg_segm = Segment(
-        positions=grg_positions,
-        nr_sigmas=nr_sigmas,
-        rms=rms
-    ).get_segmentation(data)
-
-    # Generate bboxes for all angles that cover the grg_segmentation areas 
-    # Get the bounding boxes for each angle by finding x1, y1, x2, y2 (x_min, y_min, x_max, y_max)
-    # The final product will have shape (num_angles, 4)
-    mask = grg_segm > 0
-    if mask.any():
-        rows, cols = np.where(mask)
-        x_min = int(cols.min())
-        x_max = int(cols.max())
-        y_min = int(rows.min())
-        y_max = int(rows.max())
-        bboxes = [x_min, y_min, x_max, y_max]
-    else:
-        # No valid segmentation for this angle - append None
-        bboxes = None
-    return grg_segm, bboxes

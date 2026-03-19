@@ -70,7 +70,7 @@ def main(config_path: str):
     # Setup logging
     log_filepath = os.path.join(DATASET_SAVE_DIR, "dataset_pipeline.log")
     setup_logging(log_file=log_filepath)
-    logger = setup_logging(name="grg_detection.pipelines.dataset_pipeline", log_file=log_filepath)
+    logger = setup_logging(name="b2s.pipelines.dataset_pipeline", log_file=log_filepath)
     
     # Redirect stdout and stderr to also write to the log file
     # This captures tqdm progress bars
@@ -96,11 +96,25 @@ def main(config_path: str):
     logger.info(f"Loading giants catalog from: {GIANTS_CATALOG_FILEPATH}")
     GIANTS_CATALOG = pd.read_csv(GIANTS_CATALOG_FILEPATH)
 
+    okay_ish = [
+        "Hardcastle et al. 2023",
+        "Dabhade et al. 2020 / prior",
+        "Mahato et al. 2021",
+        "Tang et al. 2020",
+        "Bassani et al. 2020",
+        "Masini et al. 2021",
+    ]
+    GIANTS_CATALOG = GIANTS_CATALOG[GIANTS_CATALOG["FirstDisc"].isin(okay_ish)]
+
     # From the GIANTS CATALOG get only 'Hardcastle et al. 2023' from the 'FirstDisc' column
-    GIANTS_CATALOG = GIANTS_CATALOG[GIANTS_CATALOG['FirstDisc'] == 'Hardcastle et al. 2023'].reset_index(drop=True)
+    # GIANTS_CATALOG = GIANTS_CATALOG[GIANTS_CATALOG['FirstDisc'] == 'Hardcastle et al. 2023'].reset_index(drop=True)
+    cats_used_str = ""
+    for cat in okay_ish:
+        cats_used_str += f"\n- `{cat}`"
     logger.warning(
-        "[BE CAREFUL AND DO NOT IGNORE THIS MESSAGE!]: "
-        "Using only the giants from 'Hardcastle et al. 2023' in the giants catalog!"
+        "[BE CAREFUL AND DO NOT IGNORE THIS MESSAGE!]: " + "\n"
+        "Using only the giants from:" + 
+        f"{cats_used_str}"       
     ) # TODO: REMOVE THIS WARNING IN THE FUTURE WHEN THE GIANTS CATALOG IS FINALIZED AND WE WANT TO USE ALL THE GIANTS!
     
     # Load the component catalogue
@@ -143,7 +157,15 @@ def main(config_path: str):
     logger.info(f"Finished building the dataset.")
 
     elapsed_time = timeit.default_timer() - start_time
-    logger.info(f"Dataset generation pipeline completed successfully in {elapsed_time:.2f} seconds.")
+    if elapsed_time < 60: # less than a minute
+        logger.info(f"Dataset generation pipeline completed successfully in {elapsed_time:.2f} seconds.")
+    elif elapsed_time < 3600: # less than an hour
+        minutes, seconds = divmod(elapsed_time, 60)
+        logger.info(f"Dataset generation pipeline completed successfully in {int(minutes)} minutes and {seconds:.2f} seconds.")
+    else:
+        hours, remainder = divmod(elapsed_time, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        logger.info(f"Dataset generation pipeline completed successfully in {int(hours)} hours, {int(minutes)} minutes and {seconds:.2f} seconds.")
 
 
 if __name__ == "__main__":

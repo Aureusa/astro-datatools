@@ -6,7 +6,7 @@ PATHS:
   COMPONENT_CATALOGUE_FILEPATH: "/net/vdesk/data2/penchev/catalogues/combined-components-v1.1.fits"
 
   # Where to save the generated dataset
-  SAVE_DIR: "/net/vdesk/data2/penchev/project_data/b2s_dataset/"
+  SAVE_DIR: "/net/vdesk/data2/penchev/project_data/b2s_dataset-full/"
 
 CUTOUT_PARAMS:
   CUTOUT_SIZE: 425 # pixels - this gives us 300 pixels after rotation of 45 degrees
@@ -36,6 +36,6 @@ ANNOTATIONS:
 
 PIPELINE:
   WORKERS: 10 # Number of parallel workers to use for dataset building
-  LIMIT_RADEC_LIST: 100 # null # Limit the number of RA/DEC positions to process (for testing) - leave null to process all
-  LIMIT_CUTOUTS: 100 # null # Limit the number of cutouts to process (for testing) - leave null to process all
+  LIMIT_RADEC_LIST: null # null # Limit the number of RA/DEC positions to process (for testing) - leave null to process all
+  LIMIT_CUTOUTS: null # null # Limit the number of cutouts to process (for testing) - leave null to process all
   

@@ -241,7 +241,7 @@ class PhysicsAwareFeatures:
             padding = np.zeros((physical_quantities.shape[0], valid_positions.shape[0] - physical_quantities.shape[1]))
             physical_quantities = np.hstack((physical_quantities, padding)) # shape (num_physical_quantities, num_components)
      
-        scaled_distances, within_proposal_mask = self._derive_geometrical_quantities(
+        scaled_distances, scaled_dx, scaled_dy, sin_theta, cos_theta, within_proposal_mask = self._derive_geometrical_quantities(
             proposals, valid_positions
         ) # shape (num_proposals, num_components); mask (num_components, num_proposals)
 
@@ -268,7 +268,15 @@ class PhysicsAwareFeatures:
         scaled_features = proposal_features / np.where(max_features == 0, 1, max_features)[:, np.newaxis, :]
 
         # Add the minmaj ratio and the scaled distances to the feature dimension
-        features = np.concatenate((scaled_features, min_maj_ratios[:, :, np.newaxis], scaled_distances[:, :, np.newaxis]), axis=-1)
+        features = np.concatenate((
+            scaled_features,
+            min_maj_ratios[:, :, np.newaxis],
+            scaled_distances[:, :, np.newaxis],
+            scaled_dx[:, :, np.newaxis],
+            scaled_dy[:, :, np.newaxis],
+            sin_theta[:, :, np.newaxis],
+            cos_theta[:, :, np.newaxis],
+        ), axis=-1)
         return (
             features,   # shape (num_proposals, num_components, num_features)
             within_proposal_mask.T # shape (num_proposals, num_components)
@@ -382,5 +390,21 @@ class PhysicsAwareFeatures:
         # Scale to cutout size to keep distances in a comparable range.
         # shape (num_proposals, num_components)
         scaled_distances = (valid_distances / self.cutout_size).T
-        return scaled_distances, within_proposal_mask
+
+        # Use safe widths/heights to avoid division by zero for degenerate proposals.
+        safe_proposal_widths = np.where(proposal_widths == 0, 1.0, proposal_widths)
+        safe_proposal_heights = np.where(proposal_heights == 0, 1.0, proposal_heights)
+
+        # Scale dx and dy by proposal size to get relative positions within each proposal box.
+        scaled_dx_raw = np.where(within_proposal_mask, dx / safe_proposal_widths[np.newaxis, :], 0.0)
+        scaled_dy_raw = np.where(within_proposal_mask, dy / safe_proposal_heights[np.newaxis, :], 0.0)
+        scaled_dx = scaled_dx_raw.T  # shape (num_proposals, num_components)
+        scaled_dy = scaled_dy_raw.T  # shape (num_proposals, num_components)
+
+        # Directional encoding in normalized proposal coordinates.
+        # sin/cos avoids angle discontinuity at +/-pi and is easier for MLPs to learn.
+        theta = np.arctan2(scaled_dy_raw, scaled_dx_raw)
+        sin_theta = np.where(within_proposal_mask, np.sin(theta), 0.0).T  # shape (num_proposals, num_components)
+        cos_theta = np.where(within_proposal_mask, np.cos(theta), 0.0).T  # shape (num_proposals, num_components)
+        return scaled_distances, scaled_dx, scaled_dy, sin_theta, cos_theta, within_proposal_mask
     

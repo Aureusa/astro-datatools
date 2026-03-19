@@ -10,16 +10,16 @@ import logging
 import os
 import pandas as pd
 
-from astro_datatools import setup_logging
-
-logger = logging.getLogger("coco_dataset_splitter")
+from astro_datatools.logger import setup_logging
 
 
 def split_coco_dataset_by_components(
+        coco_data: dict,
         coco_json_path: str,
         output_dir: str,
         splits: dict = None,
-        seed: int = 42
+        seed: int = 42,
+        logger: logging.Logger = None
     ) -> dict:
     """
     Split a COCO dataset into train/val/test sets with stratification by component count.
@@ -43,17 +43,7 @@ def split_coco_dataset_by_components(
     if splits is None:
         splits = {'train': 0.7, 'val': 0.15, 'test': 0.15}
     
-    # Validate splits sum to 1.0
-    total = sum(splits.values())
-    if not np.isclose(total, 1.0):
-        raise ValueError(f"Split ratios must sum to 1.0, got {total}")
-    
     np.random.seed(seed)
-    
-    # Load COCO annotations
-    logger.info(f"Loading COCO dataset from {coco_json_path}")
-    with open(coco_json_path, 'r') as f:
-        coco_data = json.load(f)
     
     # Get the source directory for images and proposals
     source_dir = Path(coco_json_path).parent
@@ -64,11 +54,7 @@ def split_coco_dataset_by_components(
     component_count_groups = defaultdict(list)
     image_id_to_data = {}
     annotations_by_image = defaultdict(list)
-    annotation_presence = defaultdict(lambda: {'bbox': False, 'segmentation': False})
     origin_to_augmented_ids = defaultdict(list)
-
-    # Get all negative examples
-    negative_image_ids = set()
     
     # First pass: build image_id_to_data and origin->augmented index for ALL images
     for img in coco_data['images']:
@@ -82,68 +68,24 @@ def split_coco_dataset_by_components(
     for ann in coco_data['annotations']:
         image_id = ann['image_id']
         annotations_by_image[image_id].append(ann)
-        if 'bbox' in ann:
-            annotation_presence[image_id]['bbox'] = True
-        if 'segmentation' in ann:
-            annotation_presence[image_id]['segmentation'] = True
     
     # Second pass: filter and group by component count (only non-rotated origin images)
     for img in tqdm(
         coco_data['images'],
         desc="Processing images"
     ):
-        # Check if both bbox and segm annotations exist for this image
-        ann_presence = annotation_presence.get(img['id'], {'bbox': False, 'segmentation': False})
-        has_bbox = ann_presence['bbox']
-        has_segm = ann_presence['segmentation']
-
-        # First check if this is a negative sample (no annotations) and handle separately
-        if 'metadata' in img and 'grg_in_sample' in img['metadata']:
-            if not img['metadata']['grg_in_sample']:
-                negative_image_ids.add(img['id'])
-                continue
-
-        if not (has_bbox and has_segm):
-            logger.warning(f"Image ID {img['id']} is missing bbox or segmentation annotations.")
-            continue
-
         # Skip rotated images - we only want to split based on origin images
         if 'metadata' in img and 'rotated' in img['metadata']:
             if img['metadata']['rotated']:
                 continue
-
-        # Extract component count from metadata
-        if 'metadata' not in img or 'grg_positions' not in img['metadata']:
-            logger.warning(f"Image ID {img['id']} is missing grg_positions in metadata.")
-            continue
-
-        component_count = len(img['metadata'].get('grg_positions', []))
-        if component_count == 0:
-            logger.warning(f"Image ID {img['id']} has zero GRG positions in metadata.")
-            continue
-        
-        component_count_groups[component_count].append(img['id'])
+        component_count_groups[1].append(img['id'])
     
     # Perform stratified split for each component count group
     split_image_ids = {split_name: [] for split_name in splits.keys()}
     split_names = list(splits.keys())
     split_ratios = [splits[name] for name in split_names]
     
-    negatives_stats = {}
-    logger.info("Splitting the negative samples:")
-    for split_name, ratio in splits.items():
-        n_negatives = len(negative_image_ids)
-        n_split_negatives = int(n_negatives * ratio)
-        split_negative_ids = np.random.choice(list(negative_image_ids), size=n_split_negatives, replace=False)
-        split_image_ids[split_name].extend(split_negative_ids.tolist())
-        negatives_stats[f'negatives_{split_name}'] = len(split_negative_ids)
-        negatives_stats[f'negatives_total'] = n_negatives
-    split_info = " | ".join([f"{name}: {negatives_stats[f'negatives_{name}']} negatives" for name in split_names])
-    logger.info(f"Total negative samples {negatives_stats['negatives_total']} -> {split_info}")
-
-    component_stats = {}
-
-    logger.info("Stratified splitting by component count:")
+    logger.info("Assigning images to splits...")
     for component_count, image_ids in component_count_groups.items():
         # Shuffle the image IDs for this component count
         image_ids = np.array(image_ids)
@@ -161,16 +103,6 @@ def split_coco_dataset_by_components(
         # Assign to splits
         for split_name, split_ids in zip(split_names, image_id_splits):
             split_image_ids[split_name].extend(split_ids.tolist())
-        
-        # Track statistics
-        component_stats[component_count] = {
-            split_name: len(split_ids) 
-            for split_name, split_ids in zip(split_names, image_id_splits)
-        }
-        component_stats[component_count]['total'] = n_images
-        
-        split_info = " | ".join([f"{name}: {len(ids)}" for name, ids in zip(split_names, image_id_splits)])
-        logger.info(f"Component count {component_count}: {n_images} images -> {split_info}")
     
     # Create COCO datasets for each split and copy files
     output_stats = {}
@@ -234,8 +166,7 @@ def split_coco_dataset_by_components(
         with open(split_json_path, 'w') as f:
             json.dump(split_coco, f, indent=4)
         
-        logger.info(f"Saved {split_name} annotations to {split_json_path}")
-        logger.info(f"Images: {len(split_coco['images'])}, Annotations: {len(split_coco['annotations'])}")
+        logger.info(f"Saved {split_name} annotations to {split_json_path}. Images: {len(split_coco['images'])}, Annotations: {len(split_coco['annotations'])}")
         
         # Track statistics
         output_stats[split_name] = {
@@ -245,29 +176,12 @@ def split_coco_dataset_by_components(
         }
     
     # Print summary statistics
-    logger.info("="*60)
-    logger.info("SPLIT SUMMARY")
-    logger.info("="*60)
-    
+    logger.info("SPLIT SUMMARY:")
     for split_name in split_names:
         stats = output_stats[split_name]
-        logger.info(f"{split_name.upper()}:")
-        logger.info(f"  Images: {stats['num_images']}")
-        logger.info(f"  Annotations: {stats['num_annotations']}")
-        logger.info(f"  Location: {stats['json_path']}")
-    
-    logger.info("="*60)
-    logger.info("COMPONENT COUNT DISTRIBUTION")
-    logger.info("="*60)
-    
-    for component_count in sorted(component_stats.keys()):
-        stats = component_stats[component_count]
-        logger.info(f"Component count {component_count} ({stats['total']} total):")
-        for split_name in split_names:
-            count = stats[split_name]
-            percentage = (count / stats['total'] * 100) if stats['total'] > 0 else 0
-            logger.info(f"  {split_name}: {count} ({percentage:.1f}%)")
-    
+        info = f"{split_name.upper()} saved to {stats['json_path']}:\n- {stats['num_images']} images\n- {stats['num_annotations']} annotations"
+        logger.info(info)
+
     # Save statistics to CSV files
     output_dir_path = Path(output_dir)
     
@@ -287,29 +201,8 @@ def split_coco_dataset_by_components(
     split_summary_df.to_csv(split_summary_csv, index=False)
     logger.info(f"Saved split summary to {split_summary_csv}")
     
-    # Save component count distribution
-    component_distribution_data = []
-    for component_count in sorted(component_stats.keys()):
-        stats = component_stats[component_count]
-        row = {
-            'component_count': component_count,
-            'total': stats['total']
-        }
-        for split_name in split_names:
-            count = stats[split_name]
-            percentage = (count / stats['total'] * 100) if stats['total'] > 0 else 0
-            row[f'{split_name}_count'] = count
-            row[f'{split_name}_percentage'] = round(percentage, 1)
-        component_distribution_data.append(row)
-    
-    component_distribution_df = pd.DataFrame(component_distribution_data)
-    component_distribution_csv = output_dir_path / "component_distribution.csv"
-    component_distribution_df.to_csv(component_distribution_csv, index=False)
-    logger.info(f"Saved component distribution to {component_distribution_csv}")
-    
     return {
         'output_stats': output_stats,
-        'component_stats': component_stats
     }
 
 
@@ -320,47 +213,103 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Split COCO dataset by component count with stratification."
     )
-    parser.add_argument(
-        "coco_json",
-        type=str,
-        help="Path to the COCO annotations JSON file"
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=str,
-        required=True,
-        help="Directory where split datasets will be saved"
-    )
-    parser.add_argument(
-        "--train",
-        type=float,
-        default=0.7,
-        help="Train split ratio (default: 0.7)"
-    )
-    parser.add_argument(
-        "--val",
-        type=float,
-        default=0.15,
-        help="Validation split ratio (default: 0.15)"
-    )
-    parser.add_argument(
-        "--test",
-        type=float,
-        default=0.15,
-        help="Test split ratio (default: 0.15)"
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Random seed for reproducibility (default: 42)"
-    )
+    # parser.add_argument(
+    #     "coco_json",
+    #     type=str,
+    #     help="Path to the COCO annotations JSON file"
+    # )
+    # parser.add_argument(
+    #     "--output-dir",
+    #     type=str,
+    #     required=True,
+    #     help="Directory where split datasets will be saved"
+    # )
+    # parser.add_argument(
+    #     "--train",
+    #     type=float,
+    #     default=0.7,
+    #     help="Train split ratio (default: 0.7)"
+    # )
+    # parser.add_argument(
+    #     "--val",
+    #     type=float,
+    #     default=0.15,
+    #     help="Validation split ratio (default: 0.15)"
+    # )
+    # parser.add_argument(
+    #     "--test",
+    #     type=float,
+    #     default=0.15,
+    #     help="Test split ratio (default: 0.15)"
+    # )
+    # parser.add_argument(
+    #     "--seed",
+    #     type=int,
+    #     default=42,
+    #     help="Random seed for reproducibility (default: 42)"
+    # )
     
-    args = parser.parse_args()
+    # args = parser.parse_args()
+
+    exists = False
+    while not exists:
+        input_prompt = "Enter path to COCO annotations JSON file (or 'exit' to quit): "
+        coco_filepath = input(input_prompt)
+        if coco_filepath.lower() == 'exit':
+            print("Aborting.")
+            sys.exit(0)
+
+        # Check if the file exists
+        if not os.path.isfile(coco_filepath):
+            print(f"Error: File '{coco_filepath}' does not exist.")
+            input_prompt = "Please enter a valid path to COCO annotations JSON file (or 'exit' to quit): "
+            exists = False
+        else:
+            exists = True    
+
+    output_dir = input("Enter output directory for split datasets: ")
+
+    train_ratio = float(input("Enter train split ratio (default 0.7): ") or 0.7)
+    val_ratio = float(input("Enter validation split ratio (default 0.15): ") or 0.15)
+    test_ratio = float(input("Enter test split ratio (default 0.15): ") or 0.15)
+
+    valid_ratio = False
+    while not valid_ratio:
+        total = train_ratio + val_ratio + test_ratio
+        if not np.isclose(total, 1.0):
+            print(f"Error: Split ratios must sum to 1.0, got {total}. Please re-enter the ratios.")
+            train_ratio = float(input("Enter train split ratio (default 0.7): ") or 0.7)
+            val_ratio = float(input("Enter validation split ratio (default 0.15): ") or 0.15)
+            test_ratio = float(input("Enter test split ratio (default 0.15): ") or 0.15)
+        else:
+            valid_ratio = True
+
+    seed = int(input("Enter random seed for reproducibility (default 42): ") or 42)
+    
+    with open(coco_filepath, 'r') as f:
+        coco_data = json.load(f)
+
+    nr_images = len(coco_data['images'])
+    nr_annotations = len(coco_data['annotations'])
+
+    # Overview of the configuration
+    print("\nConfiguration:")
+    print(f"COCO JSON file: {coco_filepath}")
+    print(f"Output directory: {output_dir}")
+    print(f"Number of images: {nr_images} (annotations {nr_annotations})")
+    print(f"Train split ratio: {train_ratio} ({int(train_ratio*nr_images)} images)")
+    print(f"Validation split ratio: {val_ratio} ({int(val_ratio*nr_images)} images)")
+    print(f"Test split ratio: {test_ratio} ({int(test_ratio*nr_images)} images)")
+    print(f"Random seed: {seed}")
+
+    continue_confirm = input("Continue with these settings? (y/n): ")
+    if continue_confirm.lower() != 'y':
+        print("Aborting.")
+        sys.exit(0)
 
     # Setup logging
-    log_filepath = os.path.join(args.output_dir, "dataset_pipeline.log")
-    setup_logging(log_file=log_filepath, level="DEBUG")
+    log_filepath = os.path.join(output_dir, "dataset_pipeline.log")
+    logger = setup_logging(name="b2s.pipelines.split_coco_dataset", log_file=log_filepath)
     
     # Redirect stdout and stderr to also write to the log file
     # This captures tqdm progress bars
@@ -380,16 +329,26 @@ if __name__ == "__main__":
     sys.stderr = TeeOutput(sys.stderr, log_file_handle)
     
     splits = {
-        'train': args.train,
-        'val': args.val,
-        'test': args.test
+        'train': train_ratio,
+        'val': val_ratio,
+        'test': test_ratio
     }
     
     split_coco_dataset_by_components(
-        coco_json_path=args.coco_json,
-        output_dir=args.output_dir,
+        coco_data=coco_data,
+        coco_json_path=coco_filepath,
+        output_dir=output_dir,
         splits=splits,
-        seed=args.seed
+        seed=seed,
+        logger=logger
     )
     elapsed_time = timeit.default_timer() - start_time
-    logger.info(f"Dataset splitting completed successfully in {elapsed_time:.2f} seconds.")
+    if elapsed_time < 60: # less than a minute
+        logger.info(f"Dataset splitting completed successfully in in {elapsed_time:.2f} seconds.")
+    elif elapsed_time < 3600: # less than an hour
+        minutes, seconds = divmod(elapsed_time, 60)
+        logger.info(f"Dataset splitting completed successfully in in {int(minutes)} minutes and {seconds:.2f} seconds.")
+    else:
+        hours, remainder = divmod(elapsed_time, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        logger.info(f"Dataset splitting completed successfully in in {int(hours)} hours, {int(minutes)} minutes and {seconds:.2f} seconds.")
