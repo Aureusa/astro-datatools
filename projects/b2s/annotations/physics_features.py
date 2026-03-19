@@ -204,15 +204,13 @@ class PhysicsAwareFeatures:
         return gt_component_membership, gt_proposal_validity
 
     def _derive_fast(self, augmented_proposals, valid_positions, physical_quantities, indeces_to_keep):
-        try:
-            proposals = np.array(augmented_proposals) # shape (num_proposals, 4)
-        except ValueError:
-            # This can happen if the array has an inhomogeneous shape, which can
-            # occur if there are different number of proposals for some angles.
-            # This happens because some components go out of the cutout after rotation and croping,
-            # which results in different number of valid positions and thus different number of proposals
-            # after segmentation and proposal generation.
-            # In this case we can recursively call this function for each angle separately and concatenate the results
+        # This if else block is to handle the recurrent structure of the data,
+        # where we have a list of proposals and valid positions for each angle,
+        # but the physical quantities are shared across angles and only need to be indexed once.
+        if isinstance(augmented_proposals, list):
+            # If we have a list of proposals for each angle,
+            # we compute the features for each angle separately
+            # and return a list of feature arrays and masks for each angle.
             features_list = []
             within_proposal_mask_list = []
             for i in range(len(augmented_proposals)): # Loop over all angles
@@ -222,6 +220,10 @@ class PhysicsAwareFeatures:
                 features_list.append(features)
                 within_proposal_mask_list.append(within_proposal_mask)
             return features_list, within_proposal_mask_list
+        elif isinstance(augmented_proposals, np.ndarray):
+            # If we have a single array of proposals, we compute the
+            # features directly and return a single feature array and mask.
+            proposals = augmented_proposals # shape (num_proposals, 4)
         
         if len(proposals.shape) == 3: # (angles, num_proposals, 4)
             # Just get the first angle as the features are the same for all angles,
@@ -245,7 +247,6 @@ class PhysicsAwareFeatures:
             proposals, valid_positions
         ) # shape (num_proposals, num_components); mask (num_components, num_proposals)
 
-        # TODO: SOMETHING GOES WRONG HERE \/ \/ \/ \/
         # Add another axis for proposals and mask out the components that are not within each proposal
         # shape (num_proposals, num_components, num_features)
         proposal_features = np.where(
@@ -253,7 +254,6 @@ class PhysicsAwareFeatures:
             physical_quantities.T[np.newaxis, :, :],    # (1, 10, 4)
             0
         )   # result: (31, 10, 4)
-        # /\ /\ /\ /\ /\ /\ /\ 
 
         # Find the maximum value of each feature within each proposal to get a single feature vector per proposal
         # shape (num_proposals, num_features)

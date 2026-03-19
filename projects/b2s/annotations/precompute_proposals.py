@@ -68,6 +68,13 @@ class PrecomputeProposals:
         component_source_labels: np.ndarray = None,
         target_num_components: int = None,
     ):
+        # Proposal label encoding when return_ground_truth=True:
+        # 0 -> invalid proposal
+        # 1 -> valid single-component source (SCS)
+        # 2 -> valid multi-component source (MCS)
+        SCS_LABEL = 1
+        MCS_LABEL = 2
+
         islands = self._per_island_properties()
     
         if not islands:
@@ -195,7 +202,8 @@ class PrecomputeProposals:
                         source_full_bits = source_component_bits[first_source_id]
                         # Valid iff proposal-generating components are exactly all components of one source.
                         if used_bits == source_full_bits:
-                            gt_proposal_validity[idx] = 1
+                            component_count = bin(used_bits).count("1")
+                            gt_proposal_validity[idx] = MCS_LABEL if component_count > 1 else SCS_LABEL
                             for comp_idx in range(num_components):
                                 if (used_bits >> comp_idx) & 1:
                                     gt_component_membership[idx, comp_idx] = 1

@@ -329,9 +329,7 @@ def annotate_and_augment(
             raise ValueError(f"Physical quantity '{quantity}' is not in the expected order in candidates dict for feature derivation.")
     # ----------------------------------------------------------------------------------------
 
-    positions_arr = np.array(candidates_values[2]) # holds the (x, y) positions of the components - shape (num_components, 2)
-
-    # Next: Augment the positions accordingly - needed to compute segmentation maps and bboxes
+    # Next: Augment with rotation
     # Pre-calculate crop dimensions for each angle
     crop_dims = []
     for angle in angles:
