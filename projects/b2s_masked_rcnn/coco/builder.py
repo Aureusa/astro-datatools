@@ -2,9 +2,7 @@ import pandas as pd
 from tqdm import tqdm
 import numpy as np
 import os
-import gc
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
@@ -32,7 +30,8 @@ class B2SDatasetBuilder(CocoDatasetBuilderBase):
             nr_sigmas: int,
             rms: float,
             stretch_type: str,
-            segmentation_mode: str,
+            multiclass: bool,
+            labels: dict,
             class_ratio: float,
             workers: int,
             save_dir: str,
@@ -45,7 +44,15 @@ class B2SDatasetBuilder(CocoDatasetBuilderBase):
             self.logger.error(f"Invalid stretch type: {stretch_type}. Must be 'sqrt_stretch' or 'asinh_stretch'.")
             raise ValueError(f"Invalid stretch type: {stretch_type}. Must be 'sqrt_stretch' or 'asinh_stretch'.")
 
-        self.segmentation_mode = segmentation_mode
+        if multiclass and labels is None:
+            self.logger.error(
+                "Multiclass is enabled but no labels provided. Check your configuration. "
+                "Either provide labels for all classes or disable multiclass."
+            )
+            raise ValueError("Multiclass is enabled but no labels provided.")
+
+        self.multiclass = multiclass
+        self.labels = labels
 
         # Make sure save directory exists
         self.save_dir = save_dir
@@ -163,21 +170,40 @@ class B2SDatasetBuilder(CocoDatasetBuilderBase):
             coco["annotations"].append(ann)
         return coco
 
-    def _process_single_cutout_thread(self, cutout, cutout_index, coco, coco_lock):
+    def _append_sample_result(self, sample_result: dict, coco: dict) -> dict:
+        """Append a pre-registered sample result to the COCO payload."""
+        if sample_result is None:
+            return coco
+
+        coco["images"].append(sample_result["image"])
+
+        for ann in sample_result.get("annotations", []):
+            ann["id"] = self.next_annotation_id
+            self.next_annotation_id += 1
+            coco["annotations"].append(ann)
+        return coco
+
+    def _sample_id_for_angle(self, cutout_index: int, angle_index: int) -> int:
+        return cutout_index * len(self.rotation_angles) + angle_index + 1
+
+    def _process_single_cutout_thread(self, cutout, cutout_index):
         """
-        Process a single cutout in a thread and register samples immediately.
-        IDs are deterministically calculated: cutout_index * num_rotations + angle_index + 1
+        Process a single cutout in a worker thread and return registered sample payloads.
         """
         try:
-            generated_cutouts = self._generate_positive_samples(
+            return self._generate_positive_samples(
                 cutout,
-                coco,
-                coco_lock
+                cutout_index,
             )
         except Exception as e:
             self.logger.error(f"Error in thread processing cutout (idx {cutout_index}): {e}", exc_info=True)
+            return {
+                "sample_results": [],
+                "no_proposal_generated_count": 0,
+                "no_components_found": 0,
+            }
 
-    def _generate_positive_samples(self, cutout, coco, coco_lock) -> int:
+    def _generate_positive_samples(self, cutout, cutout_index) -> dict:
         data = None
         rgb_rotated_data = None
         rotated_all_component_positions = None
@@ -192,8 +218,11 @@ class B2SDatasetBuilder(CocoDatasetBuilderBase):
                 self.logger.debug(
                     f"Skipping cutout at RA: {cutout.ra}, DEC: {cutout.dec} - no candidate components found."
                 )
-                self.no_components_found += 1
-                return 0
+                return {
+                    "sample_results": [],
+                    "no_proposal_generated_count": 0,
+                    "no_components_found": 1,
+                }
                 
             # Annotate and augment the data
             (
@@ -210,6 +239,7 @@ class B2SDatasetBuilder(CocoDatasetBuilderBase):
                 data=data,
                 candidates=candidates,
                 angles=self.rotation_angles,
+                labels=self.labels if self.multiclass else None,
                 specific_crop_size=(self.crop_size, self.crop_size),
                 dynamic_cropping=False,
                 max_precomputed_islands=self.max_precomputed_islands,
@@ -218,18 +248,20 @@ class B2SDatasetBuilder(CocoDatasetBuilderBase):
                 asinh_stretch=False if self.stretch_type == "sqrt_stretch" else True
             )
 
-            # Create and register samples for all rotations
+            # Create and register samples for all rotations.
             origin_id = None  # Will be set to the ID of the first valid sample
-            generated_cutouts = 0
+            sample_results = []
+            no_proposal_generated_count = 0
             for angle_index, angle in enumerate(self.rotation_angles):
                 curr_proposed_boxes = rotated_proposed_boxes[angle_index]
+                sample_id = self._sample_id_for_angle(cutout_index, angle_index)
 
                 # Keep image/annotation/proposal files in sync: skip angles with no proposals.
                 if curr_proposed_boxes is None or len(curr_proposed_boxes) == 0:
                     self.logger.warning(
                         f"Skipping cutout RA={cutout.ra}, DEC={cutout.dec}, angle={angle}: no proposals generated."
                     )
-                    self.no_proposal_generated_count += 1
+                    no_proposal_generated_count += 1
                     continue
 
                 curr_gt_instance_bboxes = (
@@ -258,14 +290,8 @@ class B2SDatasetBuilder(CocoDatasetBuilderBase):
                     else rotated_proposal_scores
                 )
 
-                # Get next sequential ID (thread-safe)
-                with coco_lock:
-                    sample_id = self.next_id
-                    self.next_id += 1
-                    
-                    # Set origin_id to the first valid sample ID for this cutout
-                    if origin_id is None:
-                        origin_id = sample_id
+                if origin_id is None:
+                    origin_id = sample_id
 
                 candidates_for_angle = {}
                 if grouping_metadata is not None and "angles" in grouping_metadata:
@@ -293,14 +319,16 @@ class B2SDatasetBuilder(CocoDatasetBuilderBase):
                     directory=self.save_dir,
                     save_image=True
                 )
-                
-                # Register sample with thread-safe lock
-                with coco_lock:
-                    coco = self._register_sample(sample, coco)
 
-                generated_cutouts += 1
+                sample_result = sample.register_sample()
+                if sample_result is not None:
+                    sample_results.append((sample_id, sample_result))
 
-            return generated_cutouts
+            return {
+                "sample_results": sample_results,
+                "no_proposal_generated_count": no_proposal_generated_count,
+                "no_components_found": 0,
+            }
         finally:
             # Free memory
             del data
@@ -308,18 +336,14 @@ class B2SDatasetBuilder(CocoDatasetBuilderBase):
             del rotated_proposed_boxes
             del rotated_proposal_scores
             del rotated_all_component_positions
-            gc.collect()
 
     def _populate_samples(self, coco: dict) -> dict:
         # Pre-create directories to avoid repeated existence checks
         images_dir = os.path.join(self.save_dir, "images")
         os.makedirs(images_dir, exist_ok=True)
-        
-        # Thread-safe lock for COCO dict updates and ID counter
-        coco_lock = threading.Lock()
-        
-        # Shared counter for sequential IDs (no gaps)
-        self.next_id = 1
+        proposals_dir = os.path.join(self.save_dir, "proposals")
+        os.makedirs(proposals_dir, exist_ok=True)
+
         self.next_annotation_id = 1
         
         with ThreadPoolExecutor(max_workers=self.workers) as executor:
@@ -330,8 +354,6 @@ class B2SDatasetBuilder(CocoDatasetBuilderBase):
                     self._process_single_cutout_thread,
                     cutout,
                     cutout_index,
-                    coco,
-                    coco_lock
                 )
                 future_to_index[future] = cutout_index
             
@@ -340,7 +362,11 @@ class B2SDatasetBuilder(CocoDatasetBuilderBase):
                 for future in as_completed(future_to_index):
                     cutout_index = future_to_index[future]
                     try:
-                        future.result()  # Samples already registered inside thread
+                        result = future.result()
+                        self.no_proposal_generated_count += result["no_proposal_generated_count"]
+                        self.no_components_found += result["no_components_found"]
+                        for _, sample_result in sorted(result["sample_results"], key=lambda item: item[0]):
+                            coco = self._append_sample_result(sample_result, coco)
                     except Exception as e:
                         self.logger.error(f"Error processing cutout {cutout_index}: {e}", exc_info=True)
                     finally:

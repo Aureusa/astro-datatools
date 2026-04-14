@@ -112,7 +112,8 @@ def _segmentation_from_positions_via_connected_components(
     fluxes = np.array(fluxes)[indeces_to_keep]
 
     # TODO: Time this, it might be slow!
-    if len(fluxes) > max_islands:
+    num_fluxes = len(fluxes)
+    if num_fluxes > (max_islands if max_islands is not None else num_fluxes + 1):
         # Remove the smallest fluxes to keep only max_islands
         sorted_indices = np.argsort(fluxes)
         constrained_sorted_indices = sorted_indices[-max_islands:]
@@ -244,6 +245,7 @@ def annotate_and_augment(
         data: np.ndarray,
         candidates: dict[str, list],
         angles: list[int],
+        labels: dict[str, int] = None,
         height_and_width_axes: tuple = (-2, -1),
         dynamic_cropping: bool = True,
         specific_crop_size: tuple[int, int] = None,
@@ -350,7 +352,7 @@ def annotate_and_augment(
             positions=rotated_all_component_positions[i],
             indeces_to_keep=original_indices_to_keep_after_rotation[i],
             fluxes=candidates.get("total_flux", []),
-            max_islands=max_precomputed_islands,
+            max_islands=None, # Apply island constrain later in proposals generation
             nr_sigmas=nr_sigmas,
             rms=rms,
         )
@@ -383,6 +385,7 @@ def annotate_and_augment(
             return_scores=True,
             return_ground_truth=True,
             return_instance_targets=True,
+            labels=labels,
             component_positions=np.asarray(valid_positions_list[i], dtype=np.int32),
             component_source_labels=angle_source_labels,
         )

@@ -92,11 +92,7 @@ class LoTSS_B2S_MaskRCNN_Sample(CocoSampleBase):
 
         self.save_image = save_image
         self.image_directory = os.path.join(directory, "images")
-        if not os.path.exists(self.image_directory):
-            os.makedirs(self.image_directory)
         self.proposal_directory = os.path.join(directory, "proposals")
-        if not os.path.exists(self.proposal_directory):
-            os.makedirs(self.proposal_directory)
 
     def register_sample(self) -> dict:
         annotations = self._register_annotations()

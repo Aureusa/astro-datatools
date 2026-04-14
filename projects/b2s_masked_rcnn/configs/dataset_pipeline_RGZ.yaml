@@ -2,12 +2,15 @@ PATHS:
   # This file is used to extract the locations (and other metadata) of the discovered GRGs
   GIANTS_CATALOG_FILEPATH: "/home/penchev/strw_lofar_data_utils/data/GGO_catalogue_2025_11.csv"
 
+  # RGZ-specific
+  RGZ_RADEC_LIST_FILEPATH: "/home/penchev/strw_lofar_data_utils/data/RGZ_cutout_list.csv"
+
   # This file is used to link components to sources for the annotation procedure
   COMPONENT_CATALOGUE_FILEPATH: "/net/vdesk/data2/penchev/catalogues/combined-components-v1.1.fits"
 
   # Where to save the generated dataset
-  SAVE_DIR: "/net/vdesk/data2/penchev/project_data/b2s_masked_rcnn/"
-
+  SAVE_DIR: "/net/vdesk/data2/penchev/project_data/b2s_rgz_masked_rcnn_full_fast"
+  
 CUTOUT_PARAMS:
   CUTOUT_SIZE: 425 # pixels - this gives us 300 pixels after rotation of 45 degrees
   CROP_SIZE: 300 # pixels - final size after rotation and cropping
@@ -20,7 +23,7 @@ AUGMENTATION:
   STRETCH_TYPE: "sqrt_stretch"
 
   # Angles in degrees to rotate the cutouts for data augmentation. 0 means no rotation.
-  ROTATION_ANGLES: [0, 45, 90, 135, 180, 225, 270, 315]
+  ROTATION_ANGLES: [0, 45, 90, 135, 180]
   
   # Limits the number of islands to precompute per cutout.
   # This limits the number of precomputed proposals we get for the RCNN model.

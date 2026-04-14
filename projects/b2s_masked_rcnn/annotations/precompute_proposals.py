@@ -65,14 +65,15 @@ class PrecomputeProposals:
         return_scores: bool = True,
         return_ground_truth: bool = False,
         return_instance_targets: bool = False,
+        labels: dict[str, int] = None,
         component_positions: np.ndarray = None,
         component_source_labels: np.ndarray = None,
     ):
         # Instance category encoding when return_ground_truth=True:
         # 1 -> valid single-component source (SCS)
         # 2 -> valid multi-component source (MCS)
-        SCS_LABEL = 1
-        MCS_LABEL = 2
+        SCS_LABEL = labels["scs"] if labels and "scs" in labels else 1
+        MCS_LABEL = labels["mcs"] if labels and "mcs" in labels else 1
 
         islands = self._per_island_properties()
     
@@ -217,7 +218,7 @@ class PrecomputeProposals:
                         # Valid iff proposal-generating components are exactly all components of one source.
                         if used_bits == source_full_bits:
                             component_count = bin(used_bits).count("1")
-                            class_label = MCS_LABEL if component_count > 1 else SCS_LABEL
+                            # class_label = MCS_LABEL if component_count > 1 else SCS_LABEL
 
                             if return_instance_targets:
                                 gt_instance_bboxes.append(
@@ -242,6 +243,15 @@ class PrecomputeProposals:
                                 else:
                                     instance_mask = np.zeros_like(self.cc_map, dtype=bool)
                                 gt_instance_masks.append(instance_mask.astype(np.uint8))
+
+                                # Check how mant connected islands does the mask have
+                                unique_islands_in_mask = np.unique(self.cc_map[instance_mask])
+                                unique_islands_in_mask = unique_islands_in_mask[unique_islands_in_mask > 0] # Remove background
+                                if len(unique_islands_in_mask) > 1:
+                                    class_label = MCS_LABEL
+                                else:
+                                    class_label = SCS_LABEL
+
                                 gt_instance_category_ids.append(int(class_label))
 
                                 selected_component_indices = [
