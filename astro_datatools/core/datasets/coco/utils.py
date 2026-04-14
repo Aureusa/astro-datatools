@@ -77,7 +77,7 @@ def save_coco_image(
         image: np.ndarray,
         file_name: str,
         normalize_per_image: bool = True,
-        png_compression: int = 1
+        png_compression: int = 0
     ):
     """
     Save a COCO image (C, H, W) numpy array to a PNG file.

@@ -84,7 +84,7 @@ class CocoDatasetBuilderBase(ABC):
         try:
             # Save COCO dataset as JSON
             with open(filepath, 'w') as f:
-                json.dump(coco, f, indent=4)
+                json.dump(coco, f, separators=(",", ":"))
         except TypeError as e:
             bad = _find_non_serializable(coco)
             self.logger.error("\n[DEBUG] Non-serializable objects found in COCO dataset:")
