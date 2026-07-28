@@ -17,7 +17,7 @@ class LoTSSComponent(Segment):
         :param rms: Root Mean Square noise level of the data.
         :type rms: float
         """
-        super().__init__([positions], nr_sigmas, rms) # The positions need to be in a list for the parent class
+        super().__init__(positions, nr_sigmas, rms)
 
     def get_component(self, data: np.ndarray) -> np.ndarray:
         """

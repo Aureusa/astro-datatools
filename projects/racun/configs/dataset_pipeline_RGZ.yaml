@@ -3,13 +3,13 @@ PATHS:
   GIANTS_CATALOG_FILEPATH: "/home/penchev/strw_lofar_data_utils/data/GGO_catalogue_2025_11.csv"
 
   # RGZ-specific
-  RGZ_RADEC_LIST_FILEPATH: "/home/penchev/strw_lofar_data_utils/data/RGZ_cutout_list.csv"
+  RGZ_RADEC_LIST_FILEPATH: "/home/penchev/strw_lofar_data_utils/data/rgz_sources_coords.csv"
 
   # This file is used to link components to sources for the annotation procedure
   COMPONENT_CATALOGUE_FILEPATH: "/net/vdesk/data2/penchev/catalogues/combined-components-v1.1.fits"
 
   # Where to save the generated dataset
-  SAVE_DIR: "/net/vdesk/data2/penchev/project_data/b2s_rgz_masked_rcnn_full_fast"
+  SAVE_DIR: "/net/vdesk/data2/penchev/project_data/rgz_full_dataset"
   
 CUTOUT_PARAMS:
   CUTOUT_SIZE: 425 # pixels - this gives us 300 pixels after rotation of 45 degrees

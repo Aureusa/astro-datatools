@@ -1,8 +1,11 @@
 from skimage.transform import resize
+from typing import TYPE_CHECKING
 
 from .cosmological_distances import luminosity_distance, angular_diameter_distance
-from .lotss_object import LoTSSObject
 from .utils import jyperbeam_to_jyperpixel, jyperpixel_to_jyperbeam
+
+if TYPE_CHECKING:
+    from .lotss_object import LoTSSObject
 
 
 def _flux_scaling_factor(z1, z2, alpha=-0.7):
@@ -57,7 +60,7 @@ def _angular_scaling_factor(z1, z2):
 
     return scaling_factor
 
-def reproject(lotss_object: LoTSSObject, desired_redshift, alpha=-0.7):
+def reproject(lotss_object: "LoTSSObject", desired_redshift, alpha=-0.7):
     """
     Reproject a LoTSSObject to a desired redshift.
 

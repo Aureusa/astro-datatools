@@ -26,3 +26,24 @@ The library provides reusable abstractions for loading, transforming, and managi
 - **Minimal assumptions**: No hard dependency on a specific task or framework
 
 ---
+
+## 🚀 Getting Started
+
+Create a venv and install the package:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -e .
+```
+
+---
+
+## Projects
+
+- **RaCUN** ([https://github.com/Aureusa/racun](https://github.com/Aureusa/racun)): Radio Component Unification via Neural networks for the LOFAR Two-metre Sky Survey. This project uses `astro-datatools` for data generation, transformation, and augmentation. It is a good example of how to use the library in practice, and the supporting code can be found in the `projects/racun` folder.
+
+---
+
+## License
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details

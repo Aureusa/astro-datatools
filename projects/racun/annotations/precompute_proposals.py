@@ -1,5 +1,4 @@
 import numpy as np
-from itertools import combinations
 from scipy.ndimage import label
 
 
@@ -55,9 +54,10 @@ class PrecomputeProposals:
             for i in range(len(unique_labels))
         ]
         
-        # Sort by area and return top max_islands
+        # Sort by area (descending). Selection to max_islands is handled in precompute,
+        # where we can prioritize islands that contain provided components.
         islands.sort(key=lambda x: x["area"], reverse=True)
-        return islands[:self.max_islands]
+        return islands
 
 
     def precompute(
@@ -73,9 +73,10 @@ class PrecomputeProposals:
         # 1 -> valid single-component source (SCS)
         # 2 -> valid multi-component source (MCS)
         SCS_LABEL = labels["scs"] if labels and "scs" in labels else 1
-        MCS_LABEL = labels["mcs"] if labels and "mcs" in labels else 1
+        MCS_LABEL = labels["mcs"] if labels and "mcs" in labels else 2
 
-        islands = self._per_island_properties()
+        all_islands = self._per_island_properties()
+        islands = all_islands
     
         if return_instance_targets and not return_ground_truth:
             raise ValueError("return_instance_targets=True requires return_ground_truth=True.")
@@ -127,7 +128,33 @@ class PrecomputeProposals:
 
             num_components = int(component_positions.shape[0])
 
-            # Map connected-component labels to island indices in the selected (top-area) island list.
+            # Keep islands that contain at least one component marker first.
+            # This avoids dropping true-source islands when max_islands truncation is active.
+            if self.max_islands is not None and len(all_islands) > self.max_islands:
+                in_bounds = (
+                    (component_positions[:, 0] >= 0)
+                    & (component_positions[:, 0] < self.cc_map.shape[1])
+                    & (component_positions[:, 1] >= 0)
+                    & (component_positions[:, 1] < self.cc_map.shape[0])
+                )
+                if np.any(in_bounds):
+                    valid_positions = component_positions[in_bounds]
+                    component_island_ids = set(
+                        int(v) for v in np.unique(self.cc_map[valid_positions[:, 1], valid_positions[:, 0]]) if int(v) > 0
+                    )
+                else:
+                    component_island_ids = set()
+
+                # Keep ALL islands with components, then fill up to max_islands with non-component islands.
+                # This ensures no component loses its island due to truncation.
+                prioritized = [island for island in all_islands if int(island["id"]) in component_island_ids]
+                remaining = [island for island in all_islands if int(island["id"]) not in component_island_ids]
+                max_remaining = max(0, self.max_islands - len(prioritized))
+                islands = prioritized + remaining[:max_remaining]
+            elif self.max_islands is not None:
+                islands = all_islands[: self.max_islands]
+
+            # Map connected-component labels to island indices in the selected island list.
             island_ids = np.array([island["id"] for island in islands], dtype=np.int32)
             island_id_to_idx = {int(island_id): idx for idx, island_id in enumerate(island_ids)}
 
@@ -145,6 +172,8 @@ class PrecomputeProposals:
             for comp_idx, source_id in enumerate(source_ids):
                 source_id = int(source_id)
                 source_component_bits[source_id] = source_component_bits.get(source_id, 0) | (1 << comp_idx)
+        elif self.max_islands is not None:
+            islands = all_islands[: self.max_islands]
 
         n = len(islands)
 
@@ -196,71 +225,59 @@ class PrecomputeProposals:
             if return_ground_truth:
                 subset_component_bits[mask] = subset_component_bits[prev_mask] | island_component_bits[bit_idx]
 
-        idx = 0
-        for r in range(1, n + 1):
-            for combo in combinations(range(n), r):
-                mask = 0
-                for bit_idx in combo:
-                    mask |= (1 << bit_idx)
+        for mask in range(1, num_combinations + 1):
+            idx = mask - 1
 
-                boxes[idx, 0] = subset_xmin[mask]
-                boxes[idx, 1] = subset_ymin[mask]
-                boxes[idx, 2] = subset_xmax[mask]
-                boxes[idx, 3] = subset_ymax[mask]
-                scores[idx] = subset_area[mask]
+            boxes[idx, 0] = subset_xmin[mask]
+            boxes[idx, 1] = subset_ymin[mask]
+            boxes[idx, 2] = subset_xmax[mask]
+            boxes[idx, 3] = subset_ymax[mask]
+            scores[idx] = subset_area[mask]
 
-                if return_ground_truth:
-                    used_bits = subset_component_bits[mask]
-                    if used_bits != 0:
-                        first_comp_idx = (used_bits & -used_bits).bit_length() - 1
-                        first_source_id = int(source_ids[first_comp_idx])
-                        source_full_bits = source_component_bits[first_source_id]
-                        # Valid iff proposal-generating components are exactly all components of one source.
-                        if used_bits == source_full_bits:
-                            component_count = bin(used_bits).count("1")
-                            # class_label = MCS_LABEL if component_count > 1 else SCS_LABEL
+            if return_ground_truth:
+                used_bits = subset_component_bits[mask]
+                if used_bits != 0:
+                    first_comp_idx = (used_bits & -used_bits).bit_length() - 1
+                    first_source_id = int(source_ids[first_comp_idx])
+                    source_full_bits = source_component_bits[first_source_id]
+                    # Valid iff proposal-generating components are exactly all components of one source.
+                    if used_bits == source_full_bits:
+                        if return_instance_targets:
+                            gt_instance_bboxes.append(
+                                np.array([
+                                    subset_xmin[mask],
+                                    subset_ymin[mask],
+                                    subset_xmax[mask],
+                                    subset_ymax[mask],
+                                ], dtype=np.float32)
+                            )
 
-                            if return_instance_targets:
-                                gt_instance_bboxes.append(
-                                    np.array([
-                                        subset_xmin[mask],
-                                        subset_ymin[mask],
-                                        subset_xmax[mask],
-                                        subset_ymax[mask],
-                                    ], dtype=np.float32)
-                                )
+                            selected_island_labels = []
+                            local_mask = mask
+                            while local_mask:
+                                lsb_local = local_mask & -local_mask
+                                local_bit_idx = lsb_local.bit_length() - 1
+                                selected_island_labels.append(int(island_ids[local_bit_idx]))
+                                local_mask ^= lsb_local
 
-                                selected_island_labels = []
-                                local_mask = mask
-                                while local_mask:
-                                    lsb_local = local_mask & -local_mask
-                                    local_bit_idx = lsb_local.bit_length() - 1
-                                    selected_island_labels.append(int(island_ids[local_bit_idx]))
-                                    local_mask ^= lsb_local
+                            if selected_island_labels:
+                                instance_mask = np.isin(self.cc_map, selected_island_labels)
+                            else:
+                                instance_mask = np.zeros_like(self.cc_map, dtype=bool)
+                            gt_instance_masks.append(instance_mask.astype(np.uint8))
 
-                                if selected_island_labels:
-                                    instance_mask = np.isin(self.cc_map, selected_island_labels)
-                                else:
-                                    instance_mask = np.zeros_like(self.cc_map, dtype=bool)
-                                gt_instance_masks.append(instance_mask.astype(np.uint8))
+                            # Class is based on disconnected emission islands in the instance mask.
+                            class_label = MCS_LABEL if len(selected_island_labels) > 1 else SCS_LABEL
+                            gt_instance_category_ids.append(int(class_label))
 
-                                # Check how mant connected islands does the mask have
-                                unique_islands_in_mask = np.unique(self.cc_map[instance_mask])
-                                unique_islands_in_mask = unique_islands_in_mask[unique_islands_in_mask > 0] # Remove background
-                                if len(unique_islands_in_mask) > 1:
-                                    class_label = MCS_LABEL
-                                else:
-                                    class_label = SCS_LABEL
-
-                                gt_instance_category_ids.append(int(class_label))
-
-                                selected_component_indices = [
-                                    comp_idx for comp_idx in range(num_components)
-                                    if ((used_bits >> comp_idx) & 1) == 1
-                                ]
-                                instance_positions = component_positions[selected_component_indices]
-                                gt_instance_positions.append(instance_positions.astype(np.int32, copy=True))
-                idx += 1
+                            selected_component_indices = []
+                            local_used_bits = used_bits
+                            while local_used_bits:
+                                lsb_comp = local_used_bits & -local_used_bits
+                                selected_component_indices.append(lsb_comp.bit_length() - 1)
+                                local_used_bits ^= lsb_comp
+                            instance_positions = component_positions[selected_component_indices]
+                            gt_instance_positions.append(instance_positions.astype(np.int32, copy=True))
 
         if return_scores and scores.max() > 0:
             scores /= scores.max()

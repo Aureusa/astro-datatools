@@ -333,7 +333,7 @@ def annotate_and_augment(
     # Rotate all component positions
     all_component_positions = candidates.get("xy_list", [])  # Get the list of (x, y) positions from candidates
     rotated_all_component_positions, original_indices_to_keep_after_rotation = rotate_xy_list_of_points(
-        all_component_positions, angles, crop_dims, original_w, original_h
+        all_component_positions, angles, crop_dims, original_h, original_w
     ) # shape (num_angles, num_components) - list of lists of (x, y) positions for each angle
     
     # Generate segmentation maps for each angle for all components.
@@ -352,7 +352,7 @@ def annotate_and_augment(
             positions=rotated_all_component_positions[i],
             indeces_to_keep=original_indices_to_keep_after_rotation[i],
             fluxes=candidates.get("total_flux", []),
-            max_islands=None, # Apply island constrain later in proposals generation
+            max_islands=max_precomputed_islands,
             nr_sigmas=nr_sigmas,
             rms=rms,
         )
