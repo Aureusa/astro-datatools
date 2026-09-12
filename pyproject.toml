@@ -21,7 +21,9 @@ dependencies = [
   "pycocotools",
   "Pillow",
   "tqdm",
-  "PyYAML"
+  "PyYAML",
+  "h5py",
+  "pytest"
 ]
 
 [tool.setuptools]
