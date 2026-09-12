@@ -8,7 +8,7 @@ import argparse
 
 from astro_datatools.logger import setup_logging
 
-from b2s_masked_rcnn.coco import B2SDatasetBuilder
+from ..coco import B2SDatasetBuilder
 
 from strw_lofar_data_utils.pipelines import generate_cutouts
 

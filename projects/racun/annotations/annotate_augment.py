@@ -1,7 +1,8 @@
 import numpy as np
 from scipy.ndimage import label as ndi_label
 
-from astro_datatools.augment import RotateAugment, LotssToRGBAugment
+from astro_datatools.augment import RotateAugment
+from ..augment import LotssToRGBAugment
 from .precompute_proposals import PrecomputeProposals as proposals_generator
 
 

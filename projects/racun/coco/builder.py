@@ -12,7 +12,7 @@ from astro_datatools.core.datasets.coco.builder import CocoDatasetBuilderBase
 from .sample import LoTSS_B2S_MaskRCNN_Sample
 from .category import LoTSS_B2S_SCS_CocoCategory, LoTSS_B2S_MCS_CocoCategory
 
-from b2s_masked_rcnn.annotations import annotate_and_augment
+from ..annotations import annotate_and_augment
 
 
 B2S_SCS_CATEGORY = LoTSS_B2S_SCS_CocoCategory(id=1, name="SCS")

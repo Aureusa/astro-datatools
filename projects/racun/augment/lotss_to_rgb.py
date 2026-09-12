@@ -11,8 +11,8 @@ Sky Survey with region-based convolutional neural networks" by Mostert et al. (2
 """
 import numpy as np
 
-from .base import BaseAugment
-from ..transforms.stretch import sqrt_stretch, asinh_stretch
+from astro_datatools.augment.base import BaseAugment
+from astro_datatools.transforms.stretch import sqrt_stretch, asinh_stretch
 
 
 class LotssToRGBAugment(BaseAugment):
