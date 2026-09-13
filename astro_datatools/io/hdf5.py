@@ -1,10 +1,18 @@
 """HDF5 I/O handler, reader, writer, and astronomy dataset utilities."""
+import os
 from typing import Any, Dict, List, Optional, Union
+import itertools
 import h5py
 import numpy as np
 
+# Disable HDF5 file locking by default on cluster / networked filesystems (ZFS/NFS/Lustre)
+# if not explicitly configured in environment.
+if "HDF5_USE_FILE_LOCKING" not in os.environ:
+    os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+
 from .base import BaseIOHandler, BaseReader, BaseWriter
 from .registry import register_handler
+
 
 HDF5_EXTENSIONS = [".hdf5", ".h5", ".hdf", ".he5"]
 
@@ -207,17 +215,23 @@ class HDF5IO(BaseIOHandler):
             for k, v in attrs.items():
                 item.attrs[k] = v
 
-    def read_dict(self, filepath: str, group_path: str = "/", load_attrs: bool = True, **kwargs: Any) -> Dict[str, Any]:
-        """Read the entire HDF5 file or group into a python dictionary of numpy arrays and metadata.
+    def read_dict(self, filepath: str, group_path: str = "/", load_attrs: bool = True, **kwargs: Any) -> Any:
+        """Read the entire HDF5 file or group/dataset into a python dictionary of numpy arrays and metadata.
 
         :param filepath: Path to HDF5 file.
-        :param group_path: Group path to start reading from.
+        :param group_path: Group or dataset path to start reading from.
         :param load_attrs: Whether to load metadata attributes into '__attrs__'.
-        :return: Nested dictionary.
+        :return: Nested dictionary or numpy array.
         """
         with h5py.File(filepath, "r", **kwargs) as f:
             target = f[group_path] if group_path != "/" else f
+            if isinstance(target, h5py.Dataset):
+                val = target[()]
+                if load_attrs and len(target.attrs) > 0:
+                    return {"data": val, "__attrs__": {ak: av for ak, av in target.attrs.items()}}
+                return val
             return _recursively_read_group(target, load_attrs=load_attrs)
+
 
     def write_dict(
         self,
@@ -241,36 +255,102 @@ class HDF5IO(BaseIOHandler):
         if isinstance(filepath_or_file, str):
             with h5py.File(filepath_or_file, "r") as f:
                 target = f[path] if path != "/" else f
-                return list(target.keys())
+                try:
+                    return list(target.keys())
+                except Exception:
+                    # Fallback to key iterator if symbol table len/keys() fails
+                    return list(iter(target))
         target = filepath_or_file[path] if path != "/" else filepath_or_file
-        return list(target.keys())
+        try:
+            return list(target.keys())
+        except Exception:
+            return list(iter(target))
 
-    def tree(self, filepath_or_file: Union[str, h5py.File, h5py.Group]) -> str:
-        """Generate an ASCII tree view of the HDF5 hierarchy with shapes and attribute info."""
+
+    def tree(
+        self,
+        filepath_or_file: Union[str, h5py.File, h5py.Group],
+        max_depth: Optional[int] = None,
+        max_items_per_group: Optional[int] = 10,
+    ) -> str:
+        """Generate an ASCII tree view of the HDF5 hierarchy with shapes and attribute info.
+
+        :param filepath_or_file: Path to HDF5 file or open h5py File/Group.
+        :param max_depth: Maximum recursion depth (None for unlimited).
+        :param max_items_per_group: Max child items to display per group (None for unlimited).
+                                    Prevents hanging on files with thousands of groups/datasets.
+        :return: Formatted ASCII tree string.
+        """
         lines = []
 
-        def _walk(item: Union[h5py.File, h5py.Group, h5py.Dataset], prefix: str = ""):
+        def _safe_get_attrs_count(obj) -> int:
+            try:
+                return len(obj.attrs) if hasattr(obj, "attrs") else 0
+            except Exception:
+                return 0
+
+        def _walk(item: Union[h5py.File, h5py.Group, h5py.Dataset], prefix: str = "", current_depth: int = 0):
             if isinstance(item, (h5py.File, h5py.Group)):
-                keys = list(item.keys())
+                if max_depth is not None and current_depth >= max_depth:
+                    return
+
+                # Safely collect keys via iterator to handle HDF5 symbol table quirks
+                keys = []
+                try:
+                    for idx, key in enumerate(item):
+                        if max_items_per_group is not None and idx >= max_items_per_group:
+                            break
+                        keys.append(key)
+                except Exception:
+                    pass
+
+                try:
+                    total = len(item)
+                except Exception:
+                    total = len(keys)
+
+                truncated = max(0, total - len(keys)) if total is not None else 0
+
                 for i, k in enumerate(keys):
-                    is_last = (i == len(keys) - 1)
+                    is_last = (i == len(keys) - 1) and (truncated == 0)
                     connector = "└── " if is_last else "├── "
-                    child = item[k]
-                    if isinstance(child, h5py.Dataset):
-                        attr_info = f" [{len(child.attrs)} attrs]" if len(child.attrs) > 0 else ""
-                        lines.append(f"{prefix}{connector}{k}: Dataset shape={child.shape}, dtype={child.dtype}{attr_info}")
-                    else:
-                        attr_info = f" [{len(child.attrs)} attrs]" if len(child.attrs) > 0 else ""
-                        lines.append(f"{prefix}{connector}{k}/ (Group){attr_info}")
-                        new_prefix = prefix + ("    " if is_last else "│   ")
-                        _walk(child, new_prefix)
+                    try:
+                        child = item[k]
+                        attr_count = _safe_get_attrs_count(child)
+                        attr_info = f" [{attr_count} attrs]" if attr_count > 0 else ""
+                        if isinstance(child, h5py.Dataset):
+                            lines.append(f"{prefix}{connector}{k}: Dataset shape={child.shape}, dtype={child.dtype}{attr_info}")
+                        else:
+                            try:
+                                child_len = len(child)
+                            except Exception:
+                                child_len = "?"
+                            lines.append(f"{prefix}{connector}{k}/ (Group, {child_len} items){attr_info}")
+                            new_prefix = prefix + ("    " if is_last else "│   ")
+                            _walk(child, new_prefix, current_depth + 1)
+                    except Exception as err:
+                        lines.append(f"{prefix}{connector}{k}: <Error reading item: {err}>")
+
+                if truncated > 0:
+                    lines.append(f"{prefix}└── ... ({truncated} more items)")
 
         if isinstance(filepath_or_file, str):
             with h5py.File(filepath_or_file, "r") as f:
-                lines.append(f"{filepath_or_file} (HDF5 Root) [{len(f.attrs)} attrs]")
+                try:
+                    root_len = len(f)
+                except Exception:
+                    root_len = "?"
+                root_attrs = _safe_get_attrs_count(f)
+                lines.append(f"{filepath_or_file} (HDF5 Root, {root_len} items) [{root_attrs} attrs]")
                 _walk(f)
         else:
-            lines.append(f"HDF5 Root [{len(filepath_or_file.attrs)} attrs]")
+            try:
+                root_len = len(filepath_or_file)
+            except Exception:
+                root_len = "?"
+            root_attrs = _safe_get_attrs_count(filepath_or_file)
+            lines.append(f"HDF5 Root, {root_len} items [{root_attrs} attrs]")
             _walk(filepath_or_file)
 
         return "\n".join(lines)
+    

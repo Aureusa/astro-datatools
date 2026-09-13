@@ -23,7 +23,8 @@ dependencies = [
   "tqdm",
   "PyYAML",
   "h5py",
-  "pytest"
+  "pytest",
+  "matplotlib"
 ]
 
 [tool.setuptools]
