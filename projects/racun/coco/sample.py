@@ -2,10 +2,10 @@ from dataclasses import dataclass, field
 import os
 import numpy as np
 
-from astro_datatools.core.datasets.coco.annotation import CocoAnnotationBase
-from astro_datatools.core.datasets.coco.image import CocoImageBase
-from astro_datatools.core.datasets.coco.sample import CocoSampleBase
-from astro_datatools.core.datasets.coco.utils import mask_area, mask_to_rle, save_coco_image
+from astro_datatools.datasets.coco.annotation import CocoAnnotationBase
+from astro_datatools.datasets.coco.image import CocoImageBase
+from astro_datatools.datasets.coco.sample import CocoSampleBase
+from astro_datatools.datasets.coco.utils import mask_area, mask_to_rle, save_coco_image
 
 
 @dataclass

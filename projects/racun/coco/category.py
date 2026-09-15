@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from astro_datatools.core.datasets.coco.category import CocoCategoryBase
+from astro_datatools.datasets.coco.category import CocoCategoryBase
 
 
 @dataclass

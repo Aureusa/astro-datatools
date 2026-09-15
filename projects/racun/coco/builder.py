@@ -7,7 +7,7 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 
 from astro_datatools.logger import setup_logging
-from astro_datatools.core.datasets.coco.builder import CocoDatasetBuilderBase
+from astro_datatools.datasets.coco.builder import CocoDatasetBuilderBase
 
 from .sample import LoTSS_B2S_MaskRCNN_Sample
 from .category import LoTSS_B2S_SCS_CocoCategory, LoTSS_B2S_MCS_CocoCategory
