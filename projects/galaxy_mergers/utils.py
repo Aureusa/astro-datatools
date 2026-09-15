@@ -1,4 +1,4 @@
-sim_to_z = {
+SIM_TO_Z = {
     "0127": 0,
     "0119": 0.1,
     "0114": 0.2,
@@ -19,3 +19,6 @@ sim_to_z = {
     "0066": 2.75,
     "0064": 3.00,
 }
+
+def snapshot_to_z(snapshot):
+    return SIM_TO_Z.get(snapshot)
