@@ -19,7 +19,7 @@ def embed_in_background(image: np.ndarray, background: np.ndarray, embed_type: s
     :rtype: np.ndarray
     """
     if image.shape != background.shape:
-        raise ValueError("Image and background must have the same shape.")
+        raise ValueError("Image and background must have the same shape. image.shape={}, background.shape={}".format(image.shape, background.shape))
 
     if embed_type == "default":
         return image + background
