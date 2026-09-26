@@ -3,6 +3,9 @@ import pytest
 
 from astro_datatools.transforms.geometric import (
     crop,
+    crop_or_pad,
+    rebin,
+    rebin_matrix,
     resize,
     rotation,
     hflip,
@@ -292,3 +295,89 @@ def test_vflip_returns_independent_array():
     result[0, 0] = -1
 
     assert image[2, 0] != -1
+
+
+# ---------------------------------------------------------------------------
+# rebin
+# ---------------------------------------------------------------------------
+
+def test_rebin_matrix_rows_sum_to_one():
+    w = rebin_matrix(500, 123)
+    assert w.shape == (123, 500)
+    np.testing.assert_allclose(w.sum(axis=1), 1.0)
+
+
+def test_rebin_identity_when_size_unchanged():
+    image = np.random.default_rng(0).random((3, 40, 30))
+    result = rebin(image, (40, 30))
+    np.testing.assert_array_equal(result, image)
+    assert result is not image
+
+
+def test_rebin_preserves_mean_non_integer_factor():
+    image = np.random.default_rng(1).random((2, 500, 500))
+    result = rebin(image, 123)
+    assert result.shape == (2, 123, 123)
+    np.testing.assert_allclose(result.mean(axis=(-2, -1)), image.mean(axis=(-2, -1)), rtol=1e-12)
+
+
+def test_rebin_equals_block_mean_for_integer_factor():
+    image = np.random.default_rng(2).random((500, 500))
+    result = rebin(image, 125)
+    expected = image.reshape(125, 4, 125, 4).mean(axis=(1, 3))
+    np.testing.assert_allclose(result, expected, rtol=1e-12, atol=1e-14)
+
+
+def test_rebin_flux_mode_preserves_sum():
+    image = np.random.default_rng(3).random((3, 500, 500))
+    for n in (123, 125, 700):
+        result = rebin(image, n, conserve="flux")
+        np.testing.assert_allclose(result.sum(axis=(-2, -1)), image.sum(axis=(-2, -1)), rtol=1e-12)
+
+
+def test_rebin_non_square_and_batched():
+    image = np.ones((2, 3, 50, 80))
+    result = rebin(image, (20, 33))
+    assert result.shape == (2, 3, 20, 33)
+    np.testing.assert_allclose(result, 1.0)
+
+
+def test_rebin_rejects_unknown_mode():
+    with pytest.raises(ValueError, match="conserve"):
+        rebin(np.ones((4, 4)), 2, conserve="bogus")
+
+
+# ---------------------------------------------------------------------------
+# crop_or_pad
+# ---------------------------------------------------------------------------
+
+
+def test_crop_or_pad_crops_like_center_crop():
+    image = np.arange(3 * 11 * 11).reshape(3, 11, 11)
+    np.testing.assert_array_equal(crop_or_pad(image, 5), crop(image, 5))
+
+
+def test_crop_or_pad_pads_symmetrically():
+    image = np.ones((2, 3, 3))
+    result = crop_or_pad(image, 8)
+    assert result.shape == (2, 8, 8)
+    # before = (8 - 3) // 2 = 2, after = 3
+    np.testing.assert_array_equal(result[:, 2:5, 2:5], image)
+    assert result.sum() == image.sum()
+
+
+def test_crop_or_pad_mixed_axes():
+    image = np.ones((10, 4))
+    result = crop_or_pad(image, 6)
+    assert result.shape == (6, 6)
+    np.testing.assert_array_equal(result[:, 1:5], 1.0)
+    np.testing.assert_array_equal(result[:, [0, 5]], 0.0)
+
+
+def test_crop_or_pad_keeps_centre():
+    for n, size in [(528, 224), (122, 224), (9, 5), (5, 9)]:
+        image = np.zeros((n, n))
+        image[n // 2, n // 2] = 1
+        result = crop_or_pad(image, size)
+        y, x = np.unravel_index(np.argmax(result), result.shape)
+        assert abs(y - size // 2) <= 1 and abs(x - size // 2) <= 1

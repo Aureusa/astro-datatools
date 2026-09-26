@@ -27,9 +27,17 @@ dependencies = [
   "matplotlib"
 ]
 
+[project.optional-dependencies]
+surveys = ["astroquery"]
+
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.packages.find]
 where = [".", "projects"]
 include = ["astro_datatools*", "grg_detection*", "b2s*"]
+
+[tool.pytest.ini_options]
+markers = [
+  "network: tests that access remote survey archives (skipped unless --run-network is given)",
+]
