@@ -1,5 +1,5 @@
 import math
-from typing import Union
+from typing import Tuple, Union
 import numpy as np
 from scipy.ndimage import rotate, zoom
 
@@ -120,6 +120,156 @@ def _random_crop(
     left = rng.integers(0, w - size + 1)
 
     return image[..., top:top + size, left:left + size]
+
+
+def rebin_matrix(n_in: int, n_out: int) -> np.ndarray:
+    """
+    Build the 1D area-weighted rebinning matrix between two regular grids.
+
+    Both grids are assumed to cover the same extent (the unit interval), with
+    ``n_in`` and ``n_out`` equal-width pixels respectively. Entry ``[i, j]`` is
+    the fraction of output pixel ``i`` covered by input pixel ``j``, so every
+    row sums to one and ``W @ x`` is the area-weighted *mean* of ``x`` inside
+    each output pixel. Works for any, including non-integer, size ratio.
+
+    :param n_in: Number of input pixels along the axis.
+    :type n_in: int
+    :param n_out: Number of output pixels along the axis.
+    :type n_out: int
+    :return: Matrix of shape ``(n_out, n_in)`` whose rows sum to one.
+    :rtype: np.ndarray
+    :raises ValueError: If either size is smaller than 1.
+    """
+    n_in, n_out = int(n_in), int(n_out)
+    if n_in < 1 or n_out < 1:
+        raise ValueError(f"Grid sizes must be >= 1, got n_in={n_in}, n_out={n_out}")
+
+    edges_in = np.arange(n_in + 1) / n_in
+    edges_out = np.arange(n_out + 1) / n_out
+    overlap = np.clip(
+        np.minimum(edges_out[1:, None], edges_in[None, 1:])
+        - np.maximum(edges_out[:-1, None], edges_in[None, :-1]),
+        0,
+        None,
+    )
+    return overlap / overlap.sum(axis=1, keepdims=True)
+
+
+def rebin(
+    image: np.ndarray,
+    out_shape: Union[int, Tuple[int, int]],
+    conserve: str = "surface_brightness",
+) -> np.ndarray:
+    """
+    Resample an image onto a coarser or finer pixel grid by exact area weighting.
+
+    Each output pixel is the area-weighted combination of the input pixels it
+    overlaps, with both grids spanning the same field of view. Unlike spline
+    interpolation (e.g. :func:`resize`), this does not alias when shrinking an
+    image by large or non-integer factors: every input pixel contributes to
+    the output in proportion to its overlap, so small bright clumps are neither
+    dropped nor boosted. For an integer shrink factor it reduces to an exact
+    block average (or block sum).
+
+    The operation is separable and implemented as ``Wy @ image @ Wx.T`` with
+    :func:`rebin_matrix`, broadcasting over all leading axes.
+
+    :param image: Input image. The last two dimensions are the spatial height
+        and width, e.g. ``(H, W)``, ``(C, H, W)`` or ``(B, C, H, W)``.
+    :type image: np.ndarray
+    :param out_shape: Output spatial size, either an int (square output) or
+        ``(height, width)``.
+    :type out_shape: int | tuple[int, int]
+    :param conserve: Quantity preserved by the resampling:
+
+        - ``"surface_brightness"`` (default): the mean pixel value is
+          preserved. Appropriate for images whose pixel values are intensities
+          or display units (brightness per pixel area).
+        - ``"flux"``: the total sum is preserved. Appropriate for flux maps
+          where each pixel holds the flux collected in that pixel; values are
+          multiplied by the ratio of output to input pixel area.
+    :type conserve: str
+    :return: Rebinned image of shape ``image.shape[:-2] + out_shape`` (float).
+    :rtype: np.ndarray
+    :raises ValueError: If ``conserve`` is unknown, ``out_shape`` is invalid or
+        the image has fewer than two dimensions.
+    """
+    if conserve not in ("surface_brightness", "flux"):
+        raise ValueError(
+            f"Unknown conserve mode {conserve!r}; expected 'surface_brightness' or 'flux'"
+        )
+    image = np.asarray(image)
+    if image.ndim < 2:
+        raise ValueError(f"Expected an image with at least 2 dimensions, got {image.shape}")
+
+    if isinstance(out_shape, (int, np.integer)):
+        out_shape = (int(out_shape), int(out_shape))
+    ny_out, nx_out = (int(n) for n in out_shape)
+    ny_in, nx_in = image.shape[-2:]
+
+    if (ny_out, nx_out) == (ny_in, nx_in):
+        return image.astype(np.result_type(image.dtype, np.float32), copy=True)
+
+    wy = rebin_matrix(ny_in, ny_out)
+    wx = rebin_matrix(nx_in, nx_out)
+    rebinned = wy @ image @ wx.T
+
+    if conserve == "flux":
+        rebinned = rebinned * ((ny_in * nx_in) / (ny_out * nx_out))
+
+    return rebinned
+
+
+def crop_or_pad(
+    image: np.ndarray,
+    size: Union[int, Tuple[int, int]],
+    pad_value: float = 0.0,
+) -> np.ndarray:
+    """
+    Centre-crop or symmetrically pad an image to a fixed spatial size.
+
+    No resampling is performed. Each spatial axis is handled independently:
+    if it is longer than the target it is centre-cropped with the same
+    convention as :func:`crop` (``start = (n - size) // 2``); if it is shorter
+    it is padded with ``before = (size - n) // 2`` and
+    ``after = size - n - before`` pixels of ``pad_value``. The image centre is
+    therefore kept at the centre of the output (to within one pixel).
+
+    :param image: Input image. The last two dimensions are the spatial height
+        and width.
+    :type image: np.ndarray
+    :param size: Output spatial size, an int (square) or ``(height, width)``.
+    :type size: int | tuple[int, int]
+    :param pad_value: Constant used for padded pixels. Default is 0.
+    :type pad_value: float
+    :return: Image with spatial shape ``(height, width)``.
+    :rtype: np.ndarray
+    """
+    if isinstance(size, (int, np.integer)):
+        size = (int(size), int(size))
+    target = tuple(int(s) for s in size)
+    if any(s < 1 for s in target):
+        raise ValueError(f"Output size must be >= 1, got {size}")
+
+    image = np.asarray(image)
+    slices = [slice(None)] * image.ndim
+    pad_width = [(0, 0)] * image.ndim
+
+    for axis, s in zip((-2, -1), target):
+        n = image.shape[axis]
+        if n > s:
+            start = (n - s) // 2
+            slices[axis] = slice(start, start + s)
+        elif n < s:
+            before = (s - n) // 2
+            pad_width[axis] = (before, s - n - before)
+
+    out = image[tuple(slices)]
+    if any(p != (0, 0) for p in pad_width):
+        out = np.pad(out, pad_width, mode="constant", constant_values=pad_value)
+    else:
+        out = out.copy()
+    return out
 
 
 def resize(
