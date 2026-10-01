@@ -1,0 +1,18 @@
+# Small end-to-end check: 100 random selected objects from one Q1 tile, with the
+# same selection and download settings as pipeline.yaml.
+# Separate root so it never mixes with the full run.
+extends: pipeline.yaml
+
+paths:
+  root: /home/s4861264/project_data/euclid_byol_sample
+
+catalogue:
+  tiles: [102044822]
+  query_workers: 1
+
+cutouts:
+  max_objects_per_tile: 100
+  raw_subset_fraction: 1.0
+
+dataset:
+  shard_size: 64

@@ -29,6 +29,7 @@ dependencies = [
 
 [project.optional-dependencies]
 surveys = ["astroquery"]
+euclid_byol = ["astroquery", "requests", "pyarrow"]
 
 [tool.setuptools]
 include-package-data = true

@@ -1,0 +1,128 @@
+# Euclid Q1 -> BYOL pretraining dataset: single source of truth for all stages.
+# Run each stage from the repository root, e.g.
+#   python -m projects.euclid_byol.pipelines.query_catalogue --config projects/euclid_byol/configs/pipeline.yaml
+
+paths:
+  # Everything the pipeline writes goes under this directory (see config.Paths).
+  root: /home/s4861264/project_data/q1_seg_area_100
+
+archive:
+  # ESA Euclid Science Archive (EAS). TAP for the catalogue, sas-cutout for images.
+  base_url: https://eas.esac.esa.int
+  release: Q1_R1
+  band: VIS
+  # Q1 is public and cutouts work anonymously. For proprietary data, point this at
+  # a file with the Cosmos user name and password on two lines (chmod 600).
+  credentials_file: null
+
+catalogue:
+  table: catalogue.mer_catalogue
+  # Columns pulled for every detection (tile_index is added by the pipeline).
+  columns:
+    - object_id
+    - right_ascension
+    - declination
+    - vis_det
+    - spurious_flag
+    - spurious_prob
+    - point_like_flag
+    - point_like_prob
+    - extended_prob
+    - det_quality_flag
+    - flag_vis
+    - blended_prob
+    - segmentation_area
+    - kron_radius
+    - ellipticity
+    - fwhm
+    - flux_detection_total
+    - flux_segmentation
+    - mumax_minus_mag
+    - gaia_id
+  # Pandas expressions; objects passing all of them get selected=True and are
+  # downloaded. NaN compares unequal, so "point_like_flag != 1" keeps objects
+  # whose flag is unset. Re-evaluate without re-querying with --reselect.
+  # Counts over all 30.0M Q1 detections: the first three cuts keep 20.7M; adding
+  # segmentation_area >= 100 (isophotal area in 0.1" pixels) keeps 4.72M, and the
+  # two star cuts below leave 4.25M (~0.17 TB gzip).
+  # Other thresholds: >= 50: 10.3M, >= 200: 2.26M, >= 500: 842k, >= 1200: 340k.
+  # Check any change with pipelines/estimate_storage.py.
+  selection:
+    - "vis_det == 1"
+    - "spurious_flag == 0"
+    - "point_like_flag != 1"
+    - "segmentation_area >= 100"
+    # point_like_flag is only set when det_quality_flag == 0, so bright (saturated) stars
+    # slip through it; they do have point_like_prob ~ 0.99. Objects without a
+    # probability (NaN, e.g. very extended galaxies) are kept.
+    - "~(point_like_prob > 0.5)"
+    # Saturated stars may have no point_like_prob at all, but they sit on the stellar
+    # locus: mumax_minus_mag (peak surface brightness minus magnitude) is -3.3..-2.7 for
+    # Gaia-confirmed stars and -1.75..+1.9 for large galaxies (1st-99th percentiles).
+    - "~(mumax_minus_mag < -2.6)"
+  # Restrict to these tile indices (null = all 352 Q1 tiles).
+  tiles: null
+  # Parallel TAP queries (one tile per query).
+  query_workers: 4
+  storage_budget_tb: 1.0
+
+cutouts:
+  size_pix: 224                 # must equal the frozen preprocess OUTPUT_SIZE
+  request_margin_pix: 8         # request slightly more, then crop exactly around the source
+  workers: 32                   # concurrent HTTP requests (~94 good cutouts/s measured)
+  max_requests_per_second: 150  # global safety cap (null = unlimited); 32 workers stay below it
+  timeout_s: 60
+  max_retries: 5                # retries within one request (with exponential backoff)
+  backoff_base_s: 2.0
+  backoff_max_s: 60.0
+  max_attempts: 3               # runs after which a failing object is marked permanently failed
+  # Under concurrent load the cutout service sometimes returns the cutout of another
+  # request (a whole-file swap: ~9% of responses at 8 in flight, ~25% at 64). Each
+  # response is checked against its own WCS and re-requested if the source is more than
+  # max_centre_offset_pix from the centre (correct cutouts are within 0.64 px).
+  max_centre_offset_pix: 2.0
+  recentre_retries: 5
+  flush_every: 500              # flush tile files every N objects
+  # Keep the raw float32 cutout for this fraction of objects (deterministic by
+  # object_id) for photometry checks and preprocessing verification. 0.001 is ~2e4
+  # objects, ~4 GB for a full Q1 run; 0 disables it (verify then only checks fingerprints).
+  raw_subset_fraction: 0.001
+  # Testing: download only N objects per tile (null = all), chosen by `sample`.
+  max_objects_per_tile: null
+  sample: random                # random | largest (by segmentation_area)
+  sample_seed: 0
+  # HDF5 compression of tile files: null | gzip. gzip is lossless and saves ~21% on
+  # Q1 cutouts (lzf saves nothing); it matters for peak disk if you download before sharding.
+  compression: gzip
+
+preprocess:
+  # Frozen preprocessing module (preprocess_v1.py). Its parameters are constants
+  # in that file, not here, so that no config can change them silently.
+  version: v1
+
+dataset:
+  format: hdf5
+  shard_size: 100000            # images per shard (~5 GB uncompressed)
+  compression: gzip             # null | gzip (lossless, ~21% smaller; decompression is cheap)
+  # Delete each tile file once its images are in the shards, so images are not stored
+  # twice. A small tile_<t>.status.parquet keeps the per-object status, and the download
+  # stage knows the tile is done. Set false to keep the tile files.
+  # See pipelines/estimate_storage.py for the disk space of a full run.
+  delete_tile_files: true
+
+labels:
+  # Walmsley et al. 2025, Euclid Q1 first visual morphology catalogue (Zenodo 15106473).
+  morphology:
+    url: https://zenodo.org/records/15106473/files/morphology_catalogue.parquet?download=1
+    file: morphology_catalogue.parquet   # under root/labels/
+    id_column: object_id
+    ra_column: right_ascension
+    dec_column: declination
+    # Fall back to a positional match (arcsec) for rows whose id is not in the index.
+    match_radius_arcsec: 0.5
+  # Optional DESI/DECaLS labels, cross-matched on position. Set path to enable.
+  desi:
+    path: null
+    ra_column: ra
+    dec_column: dec
+    match_radius_arcsec: 1.0
